@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const CARD_VERSION = "0.5.1";
+const CARD_VERSION = "0.5.2";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
@@ -138,9 +138,18 @@ const STYLE = `
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
   /* Dialog: native <dialog> + showModal() → top layer, near-fullscreen on phones */
-  .mc-dialog { padding: 0; border: none; background: transparent; max-width: 100vw; max-height: 100dvh; color: var(--primary-text-color); }
+  /* A <dialog> in the top layer isn't constrained by normal document flow, so
+     unlike the rest of a Home Assistant page it does NOT automatically avoid
+     the iPhone status bar / notch — it has to be told to with the safe-area
+     insets explicitly, on both the dialog's own box and the sheet's height
+     (box-sizing: border-box so the padding eats into max-height instead of
+     growing past it). */
+  .mc-dialog { box-sizing: border-box; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) 0;
+    border: none; background: transparent; max-width: 100vw; max-height: 100dvh; color: var(--primary-text-color); }
   .mc-dialog::backdrop { background: rgba(0,0,0,0.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
-  .mc-sheet { position: relative; width: min(720px, 100vw); height: min(900px, 100dvh); overflow: hidden; display: flex; flex-direction: column;
+  .mc-sheet { position: relative; width: min(720px, 100vw);
+    height: min(900px, calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+    overflow: hidden; display: flex; flex-direction: column;
     border-radius: var(--mc-radius-lg); background: color-mix(in srgb, var(--card-background-color, #1c1c1e) 94%, transparent);
     box-shadow: 0 30px 60px rgba(0,0,0,0.45); }
   .mc-sheet-scroll { overflow-y: auto; padding: 0 18px calc(18px + env(safe-area-inset-bottom)); }
