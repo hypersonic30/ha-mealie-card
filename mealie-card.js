@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const CARD_VERSION = "0.5.0";
+const CARD_VERSION = "0.5.1";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
@@ -143,8 +143,15 @@ const STYLE = `
   .mc-sheet { position: relative; width: min(720px, 100vw); height: min(900px, 100dvh); overflow: hidden; display: flex; flex-direction: column;
     border-radius: var(--mc-radius-lg); background: color-mix(in srgb, var(--card-background-color, #1c1c1e) 94%, transparent);
     box-shadow: 0 30px 60px rgba(0,0,0,0.45); }
-  .mc-sheet-scroll { overflow-y: auto; padding: 18px 18px calc(18px + env(safe-area-inset-bottom)); }
-  .mc-sheet-close { position: absolute; top: 10px; right: 10px; z-index: 3; }
+  .mc-sheet-scroll { overflow-y: auto; padding: 0 18px calc(18px + env(safe-area-inset-bottom)); }
+  /* Sticky, not fixed to the sheet itself: in some WebViews (the HA Companion
+     app in particular) the sheet can render taller than the actually visible
+     area, pushing anything positioned against the sheet's own edge off-screen
+     with no way to scroll back up to it. Sticky inside the scroll container
+     is always reachable, since it moves with the one thing that does scroll. */
+  .mc-sheet-close-bar { position: sticky; top: 0; z-index: 3; display: flex; justify-content: flex-end;
+    padding: 10px 0; margin: 0 -18px; padding-right: 18px;
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--card-background-color, #1c1c1e) 85%, transparent), transparent); }
   .mc-banner { position: absolute; left: 0; right: 0; top: 0; height: 240px; background-size: cover; background-position: center;
     filter: blur(28px) saturate(140%); opacity: 0.5; transform: scale(1.2);
     mask-image: linear-gradient(to bottom, black, transparent); -webkit-mask-image: linear-gradient(to bottom, black, transparent); }
@@ -839,17 +846,18 @@ class MealieHubCard extends HTMLElement {
   }
 
   _renderDetail() {
-    const close = `<button class="mc-btn secondary round mc-sheet-close" data-action="closeDialog" aria-label="Schließen"><ha-icon icon="mdi:close"></ha-icon></button>`;
+    const close = `<button class="mc-btn secondary round" data-action="closeDialog" aria-label="Schließen"><ha-icon icon="mdi:close"></ha-icon></button>`;
+    const closeBar = `<div class="mc-sheet-close-bar">${close}</div>`;
     const item = this._detail;
-    if (!item) return `<div class="mc-sheet">${close}<div class="mc-sheet-scroll"><div class="mc-loading">Lädt …</div></div></div>`;
+    if (!item) return `<div class="mc-sheet"><div class="mc-sheet-scroll">${closeBar}<div class="mc-loading">Lädt …</div></div></div>`;
     const ingredients = (item.recipeIngredient || []).map(ingredientText).filter(Boolean);
     const steps = (item.recipeInstructions || []).map((s) => (typeof s === "string" ? s : s.text || ""));
     const coverPath = `/api/mealie_hub/recipes/${item.id}/image`;
     const cachedCover = this._signedCache?.get(coverPath);
     return `<div class="mc-sheet mc-detail">
-      ${close}
       <div class="mc-banner" style="${cachedCover ? `background-image:url('${esc(cachedCover)}')` : ""}"></div>
       <div class="mc-sheet-scroll">
+        ${closeBar}
         <div class="mc-detail-cover">
           <div class="mc-cover-fallback">${esc(item.name)}</div>
           ${item.id ? `<img data-cover="${esc(coverPath)}" alt="" onerror="this.remove()">` : ""}
@@ -883,6 +891,7 @@ class MealieHubCard extends HTMLElement {
               : `<button class="mc-btn danger block" data-action="askDelete"><ha-icon icon="mdi:trash-can-outline"></ha-icon>Rezept löschen</button>`
           }
         </div>
+        <button class="mc-btn secondary block" style="margin-top:14px" data-action="closeDialog">Schließen</button>
       </div>
     </div>`;
   }

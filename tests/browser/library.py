@@ -42,6 +42,20 @@ with sync_playwright() as p:
     orig_href = pg.evaluate("() => card._overlayRoot.querySelector('a[href]')?.getAttribute('href')")
     check("the original source link is shown and points at orgURL", orig_href == "https://example.com/original-soup", orig_href)
 
+    # The close button must live inside the scrolling content, not pinned to the
+    # sheet's own edge: in the HA Companion app's WebView the sheet can render
+    # taller than the actually visible area, leaving nothing positioned against
+    # its outer edge reachable (no way to scroll back up to it). A button inside
+    # .mc-sheet-scroll always scrolls into view with everything else.
+    close_in_scroll = pg.evaluate(
+        "() => { const scroll = card._overlayRoot.querySelector('.mc-sheet-scroll'); "
+        "const btn = card._overlayRoot.querySelector('[data-action=closeDialog]'); "
+        "return scroll.contains(btn); }"
+    )
+    check("the close button is inside the scrollable area, not fixed to the sheet's outer edge", close_in_scroll, close_in_scroll)
+    close_buttons = pg.evaluate("() => card._overlayRoot.querySelectorAll('[data-action=closeDialog]').length")
+    check("there is a second, redundant close button further down as a safety net", close_buttons >= 2, close_buttons)
+
     # Deleting a recipe asks for confirmation; cancelling leaves it untouched.
     pg.evaluate("() => card._overlayRoot.querySelector('[data-action=askDelete]').click()")
     pg.wait_for_timeout(100)
