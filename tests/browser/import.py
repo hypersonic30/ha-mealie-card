@@ -90,6 +90,23 @@ with sync_playwright() as p:
     check("the input keeps focus across the tick", still_focused, still_focused)
     pg.wait_for_timeout(600)
 
+    # The backend's own duplicate check (against every existing recipe, not just this
+    # session) answers 409 — the card shows "schon vorhanden" with a retry button
+    # that resends with force:true, rather than quietly failing or double-importing.
+    pg.evaluate("() => { window.scenario.import = { duplicateOf: 'old-soup' }; }")
+    pg.fill(".mc-import-row input", "https://example.com/already-there")
+    pg.click(".mc-import-row button")
+    pg.wait_for_timeout(200)
+    dup_entry = pg.evaluate("() => card.shadowRoot.querySelector('.mc-history-item.warn')?.textContent || ''")
+    check("a server-side duplicate shows the existing recipe's slug", "old-soup" in dup_entry, dup_entry)
+    calls_before_retry = pg.evaluate("() => window.calls.filter(c => c.path === 'mealie_hub/import').length")
+    pg.click("button[data-action=forceImportUrl]")
+    pg.wait_for_timeout(200)
+    retry_call = pg.evaluate("() => window.calls.filter(c => c.path === 'mealie_hub/import').pop()")
+    check("the retry resends the same URL with force:true", retry_call["body"]["url"] == "https://example.com/already-there" and retry_call["body"]["force"] is True, retry_call)
+    calls_after_retry = pg.evaluate("() => window.calls.filter(c => c.path === 'mealie_hub/import').length")
+    check("the retry actually made a new request", calls_after_retry == calls_before_retry + 1, (calls_before_retry, calls_after_retry))
+
     check("no page errors", not errs, errs)
     b.close()
 print("ALL PASSED" if not fails else f"FAILED: {fails}"); sys.exit(1 if fails else 0)

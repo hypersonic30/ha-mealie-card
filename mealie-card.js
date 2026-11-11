@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const CARD_VERSION = "0.3.1";
+const CARD_VERSION = "0.4.0";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
@@ -188,6 +188,8 @@ const STYLE = `
   .mc-queue-item span, .mc-history-item span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mc-history-item.ok { color: var(--success-color, #43a047); }
   .mc-history-item.err { color: var(--error-color, #db4437); }
+  .mc-history-item.warn { color: #b36200; }
+  .mc-history-item .mc-btn { margin-left: auto; flex: 0 0 auto; }
   .mc-queue-item button { background: none; border: none; color: var(--secondary-text-color); cursor: pointer; }
 
   /* Shopping list */
@@ -517,7 +519,10 @@ class MealieHubCard extends HTMLElement {
   // Submitting the same link again while it's running/queued, or right after
   // it finished successfully in this session, asks for confirmation instead
   // of silently creating a duplicate recipe — the common case is an
-  // accidental double-tap, not an intentional re-import.
+  // accidental double-tap, not an intentional re-import. The backend runs a
+  // second, more thorough check (against every existing recipe, not just
+  // this session) and answers with its own "duplicate" result, handled in
+  // _startImport below.
   _submitImport() {
     const url = this._importUrl.trim();
     if (!url) return;
@@ -534,22 +539,22 @@ class MealieHubCard extends HTMLElement {
   _isDuplicateImport(url) {
     return (
       this._importRunning === url ||
-      this._importQueue.includes(url) ||
+      this._importQueue.some((q) => q.url === url) ||
       this._importHistory.some((h) => h.url === url && h.slug)
     );
   }
 
-  _queueOrStart(url) {
+  _queueOrStart(url, force = false) {
     if (this._importRunning) {
-      this._importQueue.push(url);
+      this._importQueue.push({ url, force });
     } else {
-      this._startImport(url);
+      this._startImport(url, force);
     }
     this._render();
   }
 
   _cancelQueued(url) {
-    const i = this._importQueue.indexOf(url);
+    const i = this._importQueue.findIndex((q) => q.url === url);
     if (i >= 0) this._importQueue.splice(i, 1);
     this._render();
   }
@@ -560,7 +565,7 @@ class MealieHubCard extends HTMLElement {
     if (el) el.textContent = `${Math.round((Date.now() - this._importStartedAt) / 1000)}s`;
   }
 
-  async _startImport(url) {
+  async _startImport(url, force = false) {
     this._importRunning = url;
     this._importStartedAt = Date.now();
     clearInterval(this._importTickTimer);
@@ -571,12 +576,12 @@ class MealieHubCard extends HTMLElement {
     this._render();
     let entry;
     try {
-      const result = await this._api("POST", "mealie_hub/import", { url });
+      const result = await this._api("POST", "mealie_hub/import", { url, force });
       entry = { url, slug: result.slug };
       this._recipesLoaded = false; // the new recipe should show up next time the library is opened
       this._loadRecipes();
     } catch (err) {
-      entry = { url, error: errMessage(err) };
+      entry = err?.body?.error === "duplicate" ? { url, duplicateSlug: err.body.slug } : { url, error: errMessage(err) };
     }
     this._importHistory.unshift(entry);
     this._importHistory.length = Math.min(this._importHistory.length, IMPORT_HISTORY_MAX);
@@ -584,7 +589,7 @@ class MealieHubCard extends HTMLElement {
     this._importRunning = null;
     const next = this._importQueue.shift();
     if (next) {
-      this._startImport(next);
+      this._startImport(next.url, next.force);
     } else {
       this._render();
     }
@@ -656,13 +661,17 @@ class MealieHubCard extends HTMLElement {
   _onAction_forceImport() {
     const url = this._duplicatePending;
     this._duplicatePending = null;
-    if (url) this._queueOrStart(url);
+    if (url) this._queueOrStart(url, true);
     else this._render();
   }
 
   _onAction_cancelDuplicate() {
     this._duplicatePending = null;
     this._render();
+  }
+
+  _onAction_forceImportUrl(el) {
+    this._queueOrStart(el.dataset.url, true);
   }
 
   _onAction_selectTag(el) {
@@ -827,8 +836,8 @@ class MealieHubCard extends HTMLElement {
         this._importQueue.length
           ? `<div class="mc-queue">${this._importQueue
               .map(
-                (u, i) => `<div class="mc-queue-item"><span>${i + 1}. ${esc(u)}</span>
-                  <button data-action="cancelQueued" data-url="${esc(u)}" aria-label="Entfernen"><ha-icon icon="mdi:close"></ha-icon></button></div>`
+                (q, i) => `<div class="mc-queue-item"><span>${i + 1}. ${esc(q.url)}</span>
+                  <button data-action="cancelQueued" data-url="${esc(q.url)}" aria-label="Entfernen"><ha-icon icon="mdi:close"></ha-icon></button></div>`
               )
               .join("")}</div>`
           : ""
@@ -836,13 +845,19 @@ class MealieHubCard extends HTMLElement {
       ${
         this._importHistory.length
           ? `<h4>Zuletzt</h4>${this._importHistory
-              .map(
-                (h) =>
-                  `<div class="mc-history-item ${h.error ? "err" : "ok"}">
-                    <ha-icon icon="${h.error ? "mdi:alert-circle-outline" : "mdi:check-circle-outline"}"></ha-icon>
-                    <span>${esc(h.url)}</span>${h.error ? `<span>${esc(h.error)}</span>` : ""}
-                  </div>`
-              )
+              .map((h) => {
+                if (h.duplicateSlug) {
+                  return `<div class="mc-history-item warn">
+                    <ha-icon icon="mdi:alert-outline"></ha-icon>
+                    <span>${esc(h.url)} – schon vorhanden (${esc(h.duplicateSlug)})</span>
+                    <button class="mc-btn secondary" data-action="forceImportUrl" data-url="${esc(h.url)}">Trotzdem</button>
+                  </div>`;
+                }
+                return `<div class="mc-history-item ${h.error ? "err" : "ok"}">
+                  <ha-icon icon="${h.error ? "mdi:alert-circle-outline" : "mdi:check-circle-outline"}"></ha-icon>
+                  <span>${esc(h.url)}</span>${h.error ? `<span>${esc(h.error)}</span>` : ""}
+                </div>`;
+              })
               .join("")}`
           : ""
       }

@@ -34,6 +34,7 @@
       if (method === "POST" && path === "mealie_hub/import") {
         const r = window.scenario.import;
         if (r.delayMs) await delay(r.delayMs);
+        if (r.duplicateOf && !body.force) throw { status: 409, body: { error: "duplicate", slug: r.duplicateOf } };
         if (r.ok) return { slug: r.slug };
         throw { status: r.status || 500, body: { error: r.error || "boom" } };
       }
