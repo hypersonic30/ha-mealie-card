@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const CARD_VERSION = "0.6.1";
+const CARD_VERSION = "0.7.0";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
@@ -258,10 +258,15 @@ class MealieHubCard extends HTMLElement {
 
     this._importUrl = "";
     this._duplicatePending = null; // a URL awaiting "really import this again?" confirmation
-    this._importRunning = null; // the URL currently being imported, or null
-    this._importStartedAt = 0;
-    this._importQueue = []; // URLs waiting their turn
-    this._importHistory = []; // [{url, slug, error}], newest first
+    // The actual queue/running/history state lives in Home Assistant now (see
+    // import_queue.py in the integration) — these three are just a mirror of the
+    // server's last-polled status, so a page reload never loses what's running or
+    // waiting, and never interrupts the import itself (it was never tied to this
+    // browser tab's connection to begin with).
+    this._importRunning = null; // {url, started_at} | null
+    this._importQueue = []; // [{url, force}]
+    this._importHistory = []; // [{url, slug}|{url, error}|{url, duplicateSlug}], newest first
+    this._importPollTimer = null;
     this._importTickTimer = null;
   }
 
@@ -271,6 +276,7 @@ class MealieHubCard extends HTMLElement {
     if (first && this._connected) {
       this._loadRecipes();
       this._loadTags();
+      this._pollImportStatus(); // resyncs with whatever's running/queued server-side, e.g. after a reload
     }
   }
 
@@ -303,6 +309,7 @@ class MealieHubCard extends HTMLElement {
     if (this._hass) {
       this._loadRecipes();
       this._loadTags();
+      this._pollImportStatus();
     }
   }
 
@@ -585,17 +592,19 @@ class MealieHubCard extends HTMLElement {
     this._render();
   }
 
-  // Imports run one at a time: submitting while one is already running queues
-  // it instead, so several links can be pasted in quick succession and each
-  // one's turn (and the current one's progress) stays visible.
+  // Imports run one at a time inside Home Assistant itself (see import_queue.py in
+  // the integration), not in this browser tab: submitting enqueues a job server-side
+  // and returns immediately, so reloading or closing this page can never interrupt a
+  // running import or lose what's still waiting its turn. This card just mirrors the
+  // server's status via polling, and resyncs once right on load — which is also what
+  // makes a running job reappear correctly right after a reload.
   //
-  // Submitting the same link again while it's running/queued, or right after
-  // it finished successfully in this session, asks for confirmation instead
-  // of silently creating a duplicate recipe — the common case is an
-  // accidental double-tap, not an intentional re-import. The backend runs a
-  // second, more thorough check (against every existing recipe, not just
-  // this session) and answers with its own "duplicate" result, handled in
-  // _startImport below.
+  // Submitting the same link again while it's running/queued, or right after it
+  // finished successfully in this session, asks for confirmation instead of silently
+  // creating a duplicate recipe — the common case is an accidental double-tap, not an
+  // intentional re-import. The backend separately runs a more thorough check (against
+  // every existing recipe, not just this session) and answers with its own 409
+  // "duplicate" result, handled in _enqueueImport below.
   _submitImport() {
     const url = this._importUrl.trim();
     if (!url) return;
@@ -606,68 +615,70 @@ class MealieHubCard extends HTMLElement {
       return;
     }
     this._duplicatePending = null;
-    this._queueOrStart(url);
+    this._enqueueImport(url, false);
   }
 
   _isDuplicateImport(url) {
     return (
-      this._importRunning === url ||
+      this._importRunning?.url === url ||
       this._importQueue.some((q) => q.url === url) ||
       this._importHistory.some((h) => h.url === url && h.slug)
     );
   }
 
-  _queueOrStart(url, force = false) {
-    if (this._importRunning) {
-      this._importQueue.push({ url, force });
-    } else {
-      this._startImport(url, force);
+  async _enqueueImport(url, force) {
+    try {
+      await this._api("POST", "mealie_hub/import", { url, force });
+    } catch (err) {
+      const entry = err?.body?.error === "duplicate" ? { url, duplicateSlug: err.body.slug } : { url, error: errMessage(err) };
+      this._importHistory.unshift(entry);
+      this._importHistory.length = Math.min(this._importHistory.length, IMPORT_HISTORY_MAX);
+      this._render();
+      return;
     }
-    this._render();
+    this._pollImportStatus();
   }
 
-  _cancelQueued(url) {
-    const i = this._importQueue.findIndex((q) => q.url === url);
-    if (i >= 0) this._importQueue.splice(i, 1);
-    this._render();
+  async _cancelQueued(url) {
+    try {
+      await this._api("POST", "mealie_hub/import/cancel", { url });
+    } catch (err) {
+      this._error = errMessage(err);
+    }
+    this._pollImportStatus();
   }
 
+  // A purely local, no-network tick for the elapsed-seconds display, computed from
+  // the server-provided start time — a surgical text update, not a full _render():
+  // rebuilding the whole panel every second would recreate the <input> node while
+  // the user is typing into it, which dismisses the iOS keyboard every tick.
   _tickImportClock() {
     if (!this._importRunning) return;
     const el = this.shadowRoot.querySelector(".mc-job-time");
-    if (el) el.textContent = `${Math.round((Date.now() - this._importStartedAt) / 1000)}s`;
+    if (el) el.textContent = `${Math.round(Date.now() / 1000 - this._importRunning.started_at)}s`;
   }
 
-  async _startImport(url, force = false) {
-    this._importRunning = url;
-    this._importStartedAt = Date.now();
-    clearInterval(this._importTickTimer);
-    // A surgical update, not a full _render(): rebuilding the whole panel
-    // every second would recreate the <input> node while the user is typing
-    // into it, which dismisses the iOS keyboard every tick.
-    this._importTickTimer = setInterval(() => this._tickImportClock(), 1000);
-    this._render();
-    let entry;
+  async _pollImportStatus() {
+    const wasRunning = !!this._importRunning;
     try {
-      const result = await this._api("POST", "mealie_hub/import", { url, force });
-      entry = { url, slug: result.slug };
-      // Not an eager reload: fetching now would call its own _render() a
-      // moment after this function's own completion render — two renders
-      // back to back while the user may be mid-typing the next link,
-      // instead of the single one `library`'s lazy-load triggers later.
-      this._recipesLoaded = false;
-    } catch (err) {
-      entry = err?.body?.error === "duplicate" ? { url, duplicateSlug: err.body.slug } : { url, error: errMessage(err) };
+      const status = await this._api("GET", "mealie_hub/import");
+      this._importQueue = status.queue || [];
+      this._importRunning = status.running || null;
+      this._importHistory = status.history || [];
+      if (wasRunning && !this._importRunning) {
+        this._recipesLoaded = false; // a job just finished — refetched next time the library tab opens
+      }
+    } catch (_) {
+      // a transient poll failure isn't worth an error banner; just try again next tick
     }
-    this._importHistory.unshift(entry);
-    this._importHistory.length = Math.min(this._importHistory.length, IMPORT_HISTORY_MAX);
     clearInterval(this._importTickTimer);
-    this._importRunning = null;
-    const next = this._importQueue.shift();
-    if (next) {
-      this._startImport(next.url, next.force);
-    } else {
-      this._render();
+    if (this._importRunning) {
+      this._importTickTimer = setInterval(() => this._tickImportClock(), 1000);
+    }
+    this._render();
+    clearTimeout(this._importPollTimer);
+    if (this._importRunning || this._importQueue.length) {
+      this._importPollTimer = setTimeout(() => this._pollImportStatus(), 2000);
     }
   }
 
@@ -738,7 +749,7 @@ class MealieHubCard extends HTMLElement {
   _onAction_forceImport() {
     const url = this._duplicatePending;
     this._duplicatePending = null;
-    if (url) this._queueOrStart(url, true);
+    if (url) this._enqueueImport(url, true);
     else this._render();
   }
 
@@ -748,7 +759,7 @@ class MealieHubCard extends HTMLElement {
   }
 
   _onAction_forceImportUrl(el) {
-    this._queueOrStart(el.dataset.url, true);
+    this._enqueueImport(el.dataset.url, true);
   }
 
   _onAction_selectTag(el) {
@@ -978,7 +989,7 @@ class MealieHubCard extends HTMLElement {
   }
 
   _renderImport() {
-    const elapsed = this._importRunning ? Math.round((Date.now() - this._importStartedAt) / 1000) : 0;
+    const elapsed = this._importRunning ? Math.round(Date.now() / 1000 - this._importRunning.started_at) : 0;
     return `
       <form data-form="import" class="mc-import-row">
         <input data-input="importUrl" data-focus-id="importUrl" placeholder="Link zu einem Rezept oder Insta/TikTok-Video" value="${esc(this._importUrl)}">
@@ -995,7 +1006,7 @@ class MealieHubCard extends HTMLElement {
       }
       ${
         this._importRunning
-          ? `<div class="mc-job"><div class="mc-spinner"></div><span class="mc-job-url">${esc(this._importRunning)}</span>
+          ? `<div class="mc-job"><div class="mc-spinner"></div><span class="mc-job-url">${esc(this._importRunning.url)}</span>
               <span class="mc-job-time">${elapsed}s</span></div>`
           : `<div class="mc-hint">Instagram/TikTok/Facebook/Pinterest-Links und YouTube-Shorts gehen automatisch über Social-to-Mealie, alle anderen Links über Mealies eigenen Import. Videos können mehrere Minuten dauern.</div>`
       }

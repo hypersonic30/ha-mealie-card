@@ -11,9 +11,22 @@
     shopping: { items: [{ id: "i1", display: "1 Banane", checked: false }, { id: "i2", display: "Milch", checked: true }] },
     deleteShoppingItem: { ok: true },
     clearChecked: { ok: true },
-    import: { ok: true, slug: "soup", delayMs: 0 },
+    // The real backend's import queue lives server-side (import_queue.py) and never
+    // replies with a result directly — POST just enqueues (or starts immediately if
+    // idle) and returns right away; the card learns what happened by polling GET.
+    // These two mirror that: importState is the "server" state, importDuplicates
+    // simulates the backend's pre-enqueue duplicate check (by URL -> existing slug).
+    importState: { queue: [], running: null, history: [] },
+    importDuplicates: {},
   };
-  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+  window.finishCurrentImportJob = (result) => {
+    const s = window.scenario.importState;
+    if (!s.running) return;
+    const url = s.running.url;
+    s.history.unshift({ url, ...result });
+    const next = s.queue.shift();
+    s.running = next ? { url: next.url, started_at: Date.now() / 1000 } : null;
+  };
   window.hassStub = {
     connection: {},
     callWS: async (msg) => { window.calls.push({ ws: msg }); return { path: (msg.path || "") + "?authSig=stub" }; },
@@ -50,11 +63,19 @@
       }
       if (method === "POST" && path.endsWith("/shopping-list")) return { ok: true };
       if (method === "POST" && path === "mealie_hub/import") {
-        const r = window.scenario.import;
-        if (r.delayMs) await delay(r.delayMs);
-        if (r.duplicateOf && !body.force) throw { status: 409, body: { error: "duplicate", slug: r.duplicateOf } };
-        if (r.ok) return { slug: r.slug };
-        throw { status: r.status || 500, body: { error: r.error || "boom" } };
+        const dupSlug = window.scenario.importDuplicates[body.url];
+        if (dupSlug && !body.force) throw { status: 409, body: { error: "duplicate", slug: dupSlug } };
+        const s = window.scenario.importState;
+        if (s.running) s.queue.push({ url: body.url, force: !!body.force });
+        else s.running = { url: body.url, started_at: Date.now() / 1000 };
+        return { queued: true };
+      }
+      if (method === "GET" && path === "mealie_hub/import") return window.scenario.importState;
+      if (method === "POST" && path === "mealie_hub/import/cancel") {
+        const s = window.scenario.importState;
+        const i = s.queue.findIndex((q) => q.url === body.url);
+        if (i >= 0) { s.queue.splice(i, 1); return { removed: true }; }
+        return { removed: false };
       }
       return {};
     },
