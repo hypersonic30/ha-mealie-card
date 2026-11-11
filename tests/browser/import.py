@@ -90,6 +90,29 @@ with sync_playwright() as p:
     check("the input keeps focus across the tick", still_focused, still_focused)
     pg.wait_for_timeout(600)
 
+    # A job completing fires its own _render(); loading the library in the
+    # background used to fire a SECOND one right after — two re-renders back
+    # to back while the user may be mid-typing the next link, which is what
+    # was actually still dismissing the keyboard after the per-second-tick fix.
+    # The library now only reloads when its tab is next opened, so exactly one
+    # render happens here, and focus correctly lands back on the (recreated)
+    # URL input either way.
+    pg.evaluate(
+        "() => { window.__renderCount = 0; const orig = card._render.bind(card); "
+        "card._render = (...a) => { window.__renderCount++; return orig(...a); }; }"
+    )
+    pg.evaluate("() => { window.scenario.import = { ok: true, slug: 'bg-done', delayMs: 500 }; }")
+    pg.fill(".mc-import-row input", "https://example.com/background")
+    pg.click(".mc-import-row button")
+    pg.evaluate("() => { window.__renderCount = 0; card.shadowRoot.querySelector('.mc-import-row input').focus(); }")
+    pg.wait_for_timeout(700)  # the background job's 500ms delay elapses and its completion _render() fires
+    render_count = pg.evaluate("() => window.__renderCount")
+    check("the job's completion triggers exactly one re-render, not two back to back", render_count == 1, render_count)
+    focus_after = pg.evaluate(
+        "() => { const a = card.shadowRoot.activeElement; return a && a.tagName === 'INPUT' && a.dataset.focusId === 'importUrl'; }"
+    )
+    check("focus lands back on the URL input after that one render", focus_after, focus_after)
+
     # The backend's own duplicate check (against every existing recipe, not just this
     # session) answers 409 — the card shows "schon vorhanden" with a retry button
     # that resends with force:true, rather than quietly failing or double-importing.

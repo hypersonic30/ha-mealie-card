@@ -39,6 +39,41 @@ with sync_playwright() as p:
     sheet_w = pg.evaluate("() => card._overlayRoot.querySelector('.mc-sheet').getBoundingClientRect().width")
     check("the sheet fills (close to) the viewport width, not a tiny popup", sheet_w >= 400, sheet_w)
 
+    orig_href = pg.evaluate("() => card._overlayRoot.querySelector('a[href]')?.getAttribute('href')")
+    check("the original source link is shown and points at orgURL", orig_href == "https://example.com/original-soup", orig_href)
+
+    # Deleting a recipe asks for confirmation; cancelling leaves it untouched.
+    pg.evaluate("() => card._overlayRoot.querySelector('[data-action=askDelete]').click()")
+    pg.wait_for_timeout(100)
+    confirm_shown = pg.evaluate("() => !!card._overlayRoot.querySelector('[data-action=confirmDelete]')")
+    check("asking to delete shows a confirmation, not an immediate delete", confirm_shown, confirm_shown)
+    pg.evaluate("() => card._overlayRoot.querySelector('[data-action=cancelDelete]').click()")
+    pg.wait_for_timeout(100)
+    still_has_ask = pg.evaluate("() => !!card._overlayRoot.querySelector('[data-action=askDelete]')")
+    check("cancelling goes back to the plain delete button", still_has_ask, still_has_ask)
+    delete_calls_before_cancel = pg.evaluate("() => window.calls.filter(c => c.method === 'DELETE').length")
+    check("cancelling never actually called the delete endpoint", delete_calls_before_cancel == 0, delete_calls_before_cancel)
+
+    pg.evaluate("() => card._overlayRoot.querySelector('[data-action=askDelete]').click()")
+    pg.evaluate("() => card._overlayRoot.querySelector('[data-action=confirmDelete]').click()")
+    pg.wait_for_timeout(200)
+    dialog_after_delete = pg.evaluate("() => card._overlayRoot.getElementById('mc-detail').open")
+    check("confirming the delete closes the dialog", not dialog_after_delete, dialog_after_delete)
+    delete_call = pg.evaluate("() => window.calls.filter(c => c.method === 'DELETE').pop()?.path")
+    check("the delete call targets the right recipe slug", delete_call == "mealie_hub/recipes/soup", delete_call)
+
+    # A failed delete surfaces an error and leaves the confirmation state recoverable.
+    pg.evaluate("() => { window.scenario.deleteRecipe = { ok: false, error: 'permission_denied' }; }")
+    pg.evaluate("() => card.shadowRoot.querySelector('.mc-tile').click()")
+    pg.wait_for_timeout(200)
+    pg.evaluate("() => card._overlayRoot.querySelector('[data-action=askDelete]').click()")
+    pg.evaluate("() => card._overlayRoot.querySelector('[data-action=confirmDelete]').click()")
+    pg.wait_for_timeout(200)
+    err_after_failed_delete = pg.evaluate("() => card.shadowRoot.querySelector('.mc-error')?.textContent || ''")
+    check("a failed delete shows an error instead of silently closing", "permission_denied" in err_after_failed_delete, err_after_failed_delete)
+    dialog_after_failed_delete = pg.evaluate("() => card._overlayRoot.getElementById('mc-detail').open")
+    check("the dialog stays open after a failed delete", dialog_after_failed_delete, dialog_after_failed_delete)
+
     pg.evaluate("() => card._overlayRoot.querySelector('[data-action=closeDialog]').click()")
     pg.wait_for_timeout(200)
     dialog_closed = not pg.evaluate("() => card._overlayRoot.getElementById('mc-detail').open")

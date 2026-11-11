@@ -5,7 +5,8 @@
   window.calls = [];
   window.scenario = {
     recipes: { items: [{ id: "r1", slug: "soup", name: "Suppe", image_url: "/img/r1" }] },
-    detail: { soup: { id: "r1", slug: "soup", name: "Suppe", image_url: "/img/r1", tags: [{ name: "vegan" }], recipeIngredient: [{ quantity: 1, unit: { name: "Stück" }, food: { name: "Zwiebel" }, note: "", display: "1 Stück Zwiebel" }], recipeInstructions: [{ text: "Zwiebel schneiden." }] } },
+    detail: { soup: { id: "r1", slug: "soup", name: "Suppe", image_url: "/img/r1", orgURL: "https://example.com/original-soup", tags: [{ name: "vegan" }], recipeIngredient: [{ quantity: 1, unit: { name: "Stück" }, food: { name: "Zwiebel" }, note: "", display: "1 Stück Zwiebel" }], recipeInstructions: [{ text: "Zwiebel schneiden." }] } },
+    deleteRecipe: { ok: true },
     tags: { items: [{ name: "vegan", slug: "vegan" }, { name: "schnell", slug: "schnell" }] },
     shopping: { items: [{ id: "i1", display: "1 Banane", checked: false }] },
     import: { ok: true, slug: "soup", delayMs: 0 },
@@ -25,6 +26,11 @@
         return r;
       }
       if (method === "PATCH" && path.endsWith("/tags")) return { tags: (body.tags || []).map((t) => ({ name: t })) };
+      if (method === "DELETE" && path.startsWith("mealie_hub/recipes/")) {
+        const r = window.scenario.deleteRecipe;
+        if (!r.ok) throw { status: r.status || 500, body: { error: r.error || "boom" } };
+        return { ok: true };
+      }
       if (method === "GET" && path === "mealie_hub/shopping-list") {
         if (window.scenario.shopping.error) throw { status: 404, body: { error: window.scenario.shopping.error } };
         return window.scenario.shopping;

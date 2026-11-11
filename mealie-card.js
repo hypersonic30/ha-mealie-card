@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const CARD_VERSION = "0.4.0";
+const CARD_VERSION = "0.5.0";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
@@ -120,9 +120,11 @@ const STYLE = `
   .mc-btn:active { transform: scale(0.96); }
   .mc-btn:disabled { opacity: 0.5; transform: none; box-shadow: none; cursor: default; }
   .mc-btn.secondary { color: var(--primary-text-color); background: var(--mc-soft); border: 1px solid var(--mc-line); box-shadow: none; }
+  .mc-btn.danger { background: color-mix(in srgb, var(--error-color, #db4437) 90%, transparent); box-shadow: none; }
   .mc-btn.round { width: 48px; min-width: 48px; padding: 0; }
   .mc-btn ha-icon { --mdc-icon-size: 22px; }
   .mc-btn.block { width: 100%; }
+  .mc-danger-zone { margin-top: 24px; }
 
   /* Recipe grid — every tile is the same height regardless of name length */
   .mc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px 12px; }
@@ -219,6 +221,8 @@ class MealieHubCard extends HTMLElement {
     this._detailSlug = null;
     this._detail = null;
     this._showDetailHint = null;
+    this._deleteConfirming = false;
+    this._deleteBusy = false;
 
     this._tags = []; // [{name, slug}] from /api/mealie_hub/tags
     this._tagFilter = null; // selected tag slug, or null for "Alle"
@@ -469,6 +473,24 @@ class MealieHubCard extends HTMLElement {
     this._render();
   }
 
+  async _deleteRecipe(slug) {
+    this._deleteBusy = true;
+    this._render();
+    try {
+      await this._api("DELETE", `mealie_hub/recipes/${encodeURIComponent(slug)}`);
+      this._detailDialog.close();
+      this._detailSlug = null;
+      this._detail = null;
+      this._recipesLoaded = false;
+      this._loadRecipes();
+    } catch (err) {
+      this._deleteBusy = false;
+      this._deleteConfirming = false;
+      this._error = errMessage(err);
+    }
+    this._render();
+  }
+
   async _saveTags(slug, tags) {
     try {
       const result = await this._api("PATCH", `mealie_hub/recipes/${encodeURIComponent(slug)}/tags`, { tags });
@@ -500,6 +522,8 @@ class MealieHubCard extends HTMLElement {
     this._detail = null;
     this._tagDraft = "";
     this._showDetailHint = null;
+    this._deleteConfirming = false;
+    this._deleteBusy = false;
     this._render();
     try {
       this._detail = await this._api("GET", `mealie_hub/recipes/${encodeURIComponent(slug)}`);
@@ -578,8 +602,11 @@ class MealieHubCard extends HTMLElement {
     try {
       const result = await this._api("POST", "mealie_hub/import", { url, force });
       entry = { url, slug: result.slug };
-      this._recipesLoaded = false; // the new recipe should show up next time the library is opened
-      this._loadRecipes();
+      // Not an eager reload: fetching now would call its own _render() a
+      // moment after this function's own completion render — two renders
+      // back to back while the user may be mid-typing the next link,
+      // instead of the single one `library`'s lazy-load triggers later.
+      this._recipesLoaded = false;
     } catch (err) {
       entry = err?.body?.error === "duplicate" ? { url, duplicateSlug: err.body.slug } : { url, error: errMessage(err) };
     }
@@ -625,6 +652,7 @@ class MealieHubCard extends HTMLElement {
   _onAction_switchTab(el) {
     this._activeTab = el.dataset.tab;
     if (this._activeTab === "shopping" && !this._shoppingLoaded) this._loadShoppingList();
+    if (this._activeTab === "library" && !this._recipesLoaded) this._loadRecipes();
     this._render();
   }
 
@@ -690,6 +718,20 @@ class MealieHubCard extends HTMLElement {
     this._removeTag(el.dataset.name);
   }
 
+  _onAction_askDelete() {
+    this._deleteConfirming = true;
+    this._render();
+  }
+
+  _onAction_cancelDelete() {
+    this._deleteConfirming = false;
+    this._render();
+  }
+
+  _onAction_confirmDelete() {
+    if (this._detail) this._deleteRecipe(this._detail.slug);
+  }
+
   _onInput_tagDraft(el) {
     this._tagDraft = el.value;
   }
@@ -702,6 +744,16 @@ class MealieHubCard extends HTMLElement {
 
   _render() {
     if (!this._skeletonReady) return;
+    // Rebuilding innerHTML replaces every node, including whatever the user is
+    // typing into — which on iOS dismisses the keyboard the moment the <input>
+    // it was focused on gets swapped for a new one. Capture focus/selection
+    // here and restore it below by data-focus-id, so a background event (an
+    // import finishing, a tick, a reload) never steals focus from typing.
+    const activeBefore = this.shadowRoot.activeElement;
+    const focusId = activeBefore?.dataset?.focusId;
+    const selStart = activeBefore?.selectionStart;
+    const selEnd = activeBefore?.selectionEnd;
+
     this._shellEl.innerHTML = `
       <div class="mc-header"><div class="mc-title">${esc(this._config.title)}</div></div>
       <div class="mc-nav">
@@ -718,11 +770,38 @@ class MealieHubCard extends HTMLElement {
     `;
     this._hydrateCovers(this._shellEl);
 
+    if (focusId) {
+      const el = this.shadowRoot.querySelector(`[data-focus-id="${focusId}"]`);
+      if (el) {
+        el.focus();
+        try {
+          if (typeof selStart === "number") el.setSelectionRange(selStart, selEnd);
+        } catch (_) {
+          /* not all inputs support selection */
+        }
+      }
+    }
+
     if (this._detailSlug) {
       const html = this._renderDetail();
       if (html !== this._detailDialog._html) {
+        const activeInDialog = this._overlayRoot.activeElement;
+        const dialogFocusId = activeInDialog?.dataset?.focusId;
+        const dialogSelStart = activeInDialog?.selectionStart;
+        const dialogSelEnd = activeInDialog?.selectionEnd;
         this._detailDialog._html = html;
         this._detailDialog.innerHTML = html;
+        if (dialogFocusId) {
+          const el = this._overlayRoot.querySelector(`[data-focus-id="${dialogFocusId}"]`);
+          if (el) {
+            el.focus();
+            try {
+              if (typeof dialogSelStart === "number") el.setSelectionRange(dialogSelStart, dialogSelEnd);
+            } catch (_) {
+              /* not all inputs support selection */
+            }
+          }
+        }
       }
       if (!this._detailDialog.open) this._detailDialog.showModal();
       this._hydrateCovers(this._overlayRoot);
@@ -776,13 +855,15 @@ class MealieHubCard extends HTMLElement {
           ${item.id ? `<img data-cover="${esc(coverPath)}" alt="" onerror="this.remove()">` : ""}
         </div>
         <div class="mc-detail-title">${esc(item.name)}</div>
+        ${item.orgURL ? `<a class="mc-btn secondary block" style="margin-bottom:10px" href="${esc(item.orgURL)}" target="_blank" rel="noopener">
+          <ha-icon icon="mdi:open-in-new"></ha-icon>Original ansehen</a>` : ""}
         <div class="mc-chips">
           ${(item.tags || [])
             .map((t) => `<button class="mc-chip removable" data-action="removeTag" data-name="${esc(t.name)}">${esc(t.name)}<ha-icon icon="mdi:close"></ha-icon></button>`)
             .join("")}
         </div>
         <div class="mc-tag-add">
-          <input data-input="tagDraft" placeholder="Tag hinzufügen …" value="${esc(this._tagDraft)}">
+          <input data-input="tagDraft" data-focus-id="tagDraft" placeholder="Tag hinzufügen …" value="${esc(this._tagDraft)}">
           <button class="mc-btn secondary" data-action="addTag">+</button>
         </div>
         <button class="mc-btn block" style="margin-top:14px" data-action="addToShoppingList" ${this._addToListBusy ? "disabled" : ""}>
@@ -791,6 +872,17 @@ class MealieHubCard extends HTMLElement {
         ${this._showDetailHint ? `<div class="mc-hint">${esc(this._showDetailHint)}</div>` : ""}
         ${ingredients.length ? `<h4>Zutaten</h4><ul>${ingredients.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : ""}
         ${steps.length ? `<h4>Zubereitung</h4><ol>${steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>` : ""}
+        <div class="mc-danger-zone">
+          ${
+            this._deleteConfirming
+              ? `<div class="mc-warn-box"><ha-icon icon="mdi:alert-outline"></ha-icon>
+                  <span>Dieses Rezept wirklich löschen?</span>
+                  <button class="mc-btn secondary" data-action="cancelDelete" ${this._deleteBusy ? "disabled" : ""}>Abbrechen</button>
+                  <button class="mc-btn danger" data-action="confirmDelete" ${this._deleteBusy ? "disabled" : ""}>${this._deleteBusy ? "Löscht …" : "Löschen"}</button>
+                </div>`
+              : `<button class="mc-btn danger block" data-action="askDelete"><ha-icon icon="mdi:trash-can-outline"></ha-icon>Rezept löschen</button>`
+          }
+        </div>
       </div>
     </div>`;
   }
@@ -814,7 +906,7 @@ class MealieHubCard extends HTMLElement {
     const elapsed = this._importRunning ? Math.round((Date.now() - this._importStartedAt) / 1000) : 0;
     return `
       <form data-form="import" class="mc-import-row">
-        <input data-input="importUrl" placeholder="Link zu einem Rezept oder Insta/TikTok-Video" value="${esc(this._importUrl)}">
+        <input data-input="importUrl" data-focus-id="importUrl" placeholder="Link zu einem Rezept oder Insta/TikTok-Video" value="${esc(this._importUrl)}">
         <button type="submit" class="mc-btn">Importieren</button>
       </form>
       ${
