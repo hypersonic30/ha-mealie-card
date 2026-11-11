@@ -1,0 +1,32 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#fff">
+<script>
+  customElements.define("ha-icon", class extends HTMLElement { connectedCallback(){ this.textContent = this.getAttribute("icon") || ""; } });
+  customElements.define("ha-textfield", class extends HTMLElement {});
+  window.calls = [];
+  window.scenario = {
+    recipes: { items: [{ id: "r1", slug: "soup", name: "Suppe", image_url: "/img/r1" }] },
+    detail: { soup: { id: "r1", slug: "soup", name: "Suppe", image_url: "/img/r1", recipeIngredient: ["1 Zwiebel"], recipeInstructions: [{ text: "Zwiebel schneiden." }] } },
+    import: { ok: true, slug: "soup" },
+  };
+  window.hassStub = {
+    connection: {},
+    callApi: async (method, path, body) => {
+      window.calls.push({ method, path, body });
+      if (method === "GET" && path === "mealie_hub/recipes") return window.scenario.recipes;
+      if (method === "GET" && path.startsWith("mealie_hub/recipes/")) {
+        const slug = path.split("/").pop();
+        const r = window.scenario.detail[slug];
+        if (!r) throw { status: 404, body: { error: "not found" } };
+        return r;
+      }
+      if (method === "POST" && path === "mealie_hub/import") {
+        const r = window.scenario.import;
+        if (r.ok) return { slug: r.slug };
+        throw { status: r.status || 500, body: { error: r.error || "boom" } };
+      }
+      return {};
+    },
+  };
+</script>
+<script src="/mealie-card.js" charset="utf-8"></script>
+</body></html>
