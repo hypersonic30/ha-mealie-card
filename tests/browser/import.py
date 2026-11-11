@@ -59,6 +59,37 @@ with sync_playwright() as p:
     err_entry = pg.evaluate("() => card.shadowRoot.querySelector('.mc-history-item.err')?.textContent || ''")
     check("an upstream error lands in the history as an error entry", "social_not_configured" in err_entry, err_entry)
 
+    # Submitting the same link twice asks for confirmation instead of silently duplicating it.
+    pg.evaluate("() => { window.scenario.import = { ok: true, slug: 'dup-soup' }; }")
+    pg.fill(".mc-import-row input", "https://example.com/dup")
+    pg.click(".mc-import-row button")
+    pg.wait_for_timeout(200)
+    pg.fill(".mc-import-row input", "https://example.com/dup")
+    pg.click(".mc-import-row button")
+    pg.wait_for_timeout(100)
+    warn = pg.evaluate("() => card.shadowRoot.querySelector('.mc-warn-box')?.textContent || ''")
+    check("resubmitting an already-imported link shows a confirmation instead of importing", "example.com/dup" in warn, warn)
+    calls_for_dup = pg.evaluate("() => window.calls.filter(c => c.path === 'mealie_hub/import' && c.body.url === 'https://example.com/dup').length")
+    check("the duplicate was not actually sent a second time yet", calls_for_dup == 1, calls_for_dup)
+    pg.click("button[data-action=forceImport]")
+    pg.wait_for_timeout(200)
+    calls_for_dup2 = pg.evaluate("() => window.calls.filter(c => c.path === 'mealie_hub/import' && c.body.url === 'https://example.com/dup').length")
+    check("'Trotzdem importieren' does send it again", calls_for_dup2 == 2, calls_for_dup2)
+
+    # Re-rendering every second for the elapsed-time counter must not recreate the
+    # <input> node — on iOS that would dismiss the keyboard every tick while the user
+    # is trying to type the next link in.
+    pg.evaluate("() => { window.scenario.import.delayMs = 1500; }")
+    pg.fill(".mc-import-row input", "https://example.com/slow")
+    pg.click(".mc-import-row button")
+    pg.evaluate("() => { const i = card.shadowRoot.querySelector('.mc-import-row input'); i.focus(); window.__inputBefore = i; }")
+    pg.wait_for_timeout(1100)  # at least one 1s tick fires while the import is running
+    same_node = pg.evaluate("() => card.shadowRoot.querySelector('.mc-import-row input') === window.__inputBefore")
+    check("the input DOM node survives the per-second progress tick (keyboard stays open)", same_node, same_node)
+    still_focused = pg.evaluate("() => card.shadowRoot.activeElement === window.__inputBefore")
+    check("the input keeps focus across the tick", still_focused, still_focused)
+    pg.wait_for_timeout(600)
+
     check("no page errors", not errs, errs)
     b.close()
 print("ALL PASSED" if not fails else f"FAILED: {fails}"); sys.exit(1 if fails else 0)

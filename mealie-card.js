@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const CARD_VERSION = "0.3.0";
+const CARD_VERSION = "0.3.1";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
@@ -178,6 +178,11 @@ const STYLE = `
   .mc-spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--mc-line);
     border-top-color: var(--mc-accent); animation: mc-spin 0.8s linear infinite; flex: 0 0 auto; }
   @keyframes mc-spin { to { transform: rotate(360deg); } }
+  .mc-warn-box { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--mc-radius-md);
+    background: rgba(251,140,0,0.16); border: 1px solid rgba(251,140,0,0.4); margin-top: 12px; flex-wrap: wrap; }
+  .mc-warn-box ha-icon { color: #b36200; flex: 0 0 auto; }
+  .mc-warn-box span { flex: 1; min-width: 0; font-size: 0.9em; }
+  .mc-warn-box .mc-btn { min-height: 36px; padding: 6px 14px; font-size: 0.85em; }
   .mc-queue { margin-top: 10px; }
   .mc-queue-item, .mc-history-item { display: flex; align-items: center; gap: 8px; padding: 6px 2px; font-size: 0.88em; }
   .mc-queue-item span, .mc-history-item span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -223,6 +228,7 @@ class MealieHubCard extends HTMLElement {
     this._addToListBusy = false;
 
     this._importUrl = "";
+    this._duplicatePending = null; // a URL awaiting "really import this again?" confirmation
     this._importRunning = null; // the URL currently being imported, or null
     this._importStartedAt = 0;
     this._importQueue = []; // URLs waiting their turn
@@ -507,10 +513,33 @@ class MealieHubCard extends HTMLElement {
   // Imports run one at a time: submitting while one is already running queues
   // it instead, so several links can be pasted in quick succession and each
   // one's turn (and the current one's progress) stays visible.
+  //
+  // Submitting the same link again while it's running/queued, or right after
+  // it finished successfully in this session, asks for confirmation instead
+  // of silently creating a duplicate recipe — the common case is an
+  // accidental double-tap, not an intentional re-import.
   _submitImport() {
     const url = this._importUrl.trim();
     if (!url) return;
     this._importUrl = "";
+    if (this._duplicatePending !== url && this._isDuplicateImport(url)) {
+      this._duplicatePending = url;
+      this._render();
+      return;
+    }
+    this._duplicatePending = null;
+    this._queueOrStart(url);
+  }
+
+  _isDuplicateImport(url) {
+    return (
+      this._importRunning === url ||
+      this._importQueue.includes(url) ||
+      this._importHistory.some((h) => h.url === url && h.slug)
+    );
+  }
+
+  _queueOrStart(url) {
     if (this._importRunning) {
       this._importQueue.push(url);
     } else {
@@ -525,11 +554,20 @@ class MealieHubCard extends HTMLElement {
     this._render();
   }
 
+  _tickImportClock() {
+    if (!this._importRunning) return;
+    const el = this.shadowRoot.querySelector(".mc-job-time");
+    if (el) el.textContent = `${Math.round((Date.now() - this._importStartedAt) / 1000)}s`;
+  }
+
   async _startImport(url) {
     this._importRunning = url;
     this._importStartedAt = Date.now();
     clearInterval(this._importTickTimer);
-    this._importTickTimer = setInterval(() => this._render(), 1000);
+    // A surgical update, not a full _render(): rebuilding the whole panel
+    // every second would recreate the <input> node while the user is typing
+    // into it, which dismisses the iOS keyboard every tick.
+    this._importTickTimer = setInterval(() => this._tickImportClock(), 1000);
     this._render();
     let entry;
     try {
@@ -613,6 +651,18 @@ class MealieHubCard extends HTMLElement {
 
   _onAction_cancelQueued(el) {
     this._cancelQueued(el.dataset.url);
+  }
+
+  _onAction_forceImport() {
+    const url = this._duplicatePending;
+    this._duplicatePending = null;
+    if (url) this._queueOrStart(url);
+    else this._render();
+  }
+
+  _onAction_cancelDuplicate() {
+    this._duplicatePending = null;
+    this._render();
   }
 
   _onAction_selectTag(el) {
@@ -758,6 +808,15 @@ class MealieHubCard extends HTMLElement {
         <input data-input="importUrl" placeholder="Link zu einem Rezept oder Insta/TikTok-Video" value="${esc(this._importUrl)}">
         <button type="submit" class="mc-btn">Importieren</button>
       </form>
+      ${
+        this._duplicatePending
+          ? `<div class="mc-warn-box"><ha-icon icon="mdi:alert-outline"></ha-icon>
+              <span>Dieser Link läuft/wartet schon oder wurde gerade erst importiert: ${esc(this._duplicatePending)}</span>
+              <button class="mc-btn secondary" data-action="cancelDuplicate">Abbrechen</button>
+              <button class="mc-btn" data-action="forceImport">Trotzdem importieren</button>
+            </div>`
+          : ""
+      }
       ${
         this._importRunning
           ? `<div class="mc-job"><div class="mc-spinner"></div><span class="mc-job-url">${esc(this._importRunning)}</span>
