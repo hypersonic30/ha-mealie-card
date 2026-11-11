@@ -10,6 +10,7 @@
   };
   window.hassStub = {
     connection: {},
+    callWS: async (msg) => { window.calls.push({ ws: msg }); return { path: (msg.path || "") + "?authSig=stub" }; },
     callApi: async (method, path, body) => {
       window.calls.push({ method, path, body });
       if (method === "GET" && path === "mealie_hub/recipes") return window.scenario.recipes;

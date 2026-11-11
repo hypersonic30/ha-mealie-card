@@ -1,4 +1,4 @@
-"""Library tab: tile rendering, expand/collapse detail, a failed detail load."""
+"""Library tab: tile rendering, signed cover image, detail dialog (open/close), a failed detail load."""
 from _server import *
 from playwright.sync_api import sync_playwright
 fails = []
@@ -16,28 +16,41 @@ with sync_playwright() as p:
     )
     pg.wait_for_timeout(300)
 
-    names = pg.evaluate("() => [...card.shadowRoot.querySelectorAll('.mc-name')].map(e => e.textContent)")
+    names = pg.evaluate("() => [...card.shadowRoot.querySelectorAll('.mc-tile-title')].map(e => e.textContent)")
     check("tile shows the recipe name", names == ["Suppe"], names)
-    img = pg.evaluate("() => card.shadowRoot.querySelector('.mc-tile img')?.getAttribute('src')")
-    check("tile image uses the proxied image_url", img == "/img/r1", img)
+
+    # The image is loaded via a signed path (plain <img> tags can't send a bearer
+    # header), not the raw proxied URL directly. Checked via the sign call itself,
+    # not the <img>'s final src: against this stub server the signed URL still
+    # 404s for real, so the <img onerror="this.remove()"> fires and the element
+    # is gone by the time we could inspect it — that removal-on-404 is itself
+    # correct production behavior, just not reproducible without a real backend.
+    sign_calls = pg.evaluate("() => window.calls.filter(c => c.ws && c.ws.type === 'auth/sign_path').map(c => c.ws.path)")
+    check("the card asked Home Assistant to sign that exact path", "/api/mealie_hub/recipes/r1/image" in sign_calls, sign_calls)
 
     pg.evaluate("() => card.shadowRoot.querySelector('.mc-tile').click()")
     pg.wait_for_timeout(200)
-    detail_text = pg.evaluate("() => card.shadowRoot.querySelector('.mc-detail')?.innerText || ''")
+    dialog_open = pg.evaluate("() => card._overlayRoot.getElementById('mc-detail').open")
+    check("the detail dialog opens (showModal)", dialog_open, dialog_open)
+    detail_text = pg.evaluate("() => card._overlayRoot.getElementById('mc-detail').innerText")
     check("detail shows the ingredient", "Zwiebel" in detail_text, detail_text)
     check("detail shows the step", "schneiden" in detail_text, detail_text)
+    sheet_w = pg.evaluate("() => card._overlayRoot.querySelector('.mc-sheet').getBoundingClientRect().width")
+    check("the sheet fills (close to) the viewport width, not a tiny popup", sheet_w >= 400, sheet_w)
 
-    pg.evaluate("() => card.shadowRoot.querySelector('.mc-tile').click()")
-    pg.wait_for_timeout(100)
-    closed = pg.evaluate("() => card.shadowRoot.querySelector('.mc-detail')")
-    check("clicking again collapses the detail", closed is None, closed)
+    pg.evaluate("() => card._overlayRoot.querySelector('[data-action=closeDialog]').click()")
+    pg.wait_for_timeout(200)
+    dialog_closed = not pg.evaluate("() => card._overlayRoot.getElementById('mc-detail').open")
+    check("the close button closes the dialog", dialog_closed, dialog_closed)
 
-    # A detail fetch that 404s surfaces as a dismissable error banner, not a stuck "Lädt …".
+    # A detail fetch that 404s surfaces as a dismissable error banner, not a stuck dialog.
     pg.evaluate("() => { window.scenario.detail = {}; }")
     pg.evaluate("() => card.shadowRoot.querySelector('.mc-tile').click()")
     pg.wait_for_timeout(200)
     err = pg.evaluate("() => card.shadowRoot.querySelector('.mc-error')?.textContent || ''")
     check("a failed detail load shows the error banner", "not found" in err, err)
+    still_open = pg.evaluate("() => card._overlayRoot.getElementById('mc-detail').open")
+    check("the dialog does not stay open on a failed load", not still_open, still_open)
 
     check("no page errors", not errs, errs)
     b.close()

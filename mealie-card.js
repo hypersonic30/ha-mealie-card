@@ -9,24 +9,27 @@
  * login is needed — unlike embedding Mealie's own web UI in an iframe, this
  * also works reliably in the Home Assistant Companion app.
  *
+ * Same glass design language as the Books/Manga cards.
+ *
  * License: MIT
  */
 "use strict";
 
-const CARD_VERSION = "0.1.0";
+const CARD_VERSION = "0.2.0";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
 const DEFAULT_CONFIG = {
   title: "Rezepte",
   default_tab: "library",
-  poll_seconds: 0, // 0 = no auto-refresh; the library is cheap to refresh manually
 };
 
 const TABS = [
   { key: "library", label: "Bibliothek", icon: "mdi:book-open-variant" },
   { key: "import", label: "Importieren", icon: "mdi:link-plus" },
 ];
+
+const SIGN_EXPIRY_SECONDS = 24 * 3600;
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -39,38 +42,111 @@ function errMessage(err) {
   return "Unbekannter Fehler";
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Styles — same glass language as the Books/Manga cards, phone-first sizing
+// ─────────────────────────────────────────────────────────────────────────
+
 const STYLE = `
-  :host { display: block; }
-  .mc-card { font-family: var(--paper-font-body1_-_font-family, inherit); }
-  .mc-nav { display: flex; gap: 4px; padding: 8px 12px 0; }
-  .mc-nav-btn { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
-    padding: 8px 4px; border: none; background: none; color: var(--secondary-text-color);
-    border-radius: 12px; font: inherit; cursor: pointer; }
-  .mc-nav-btn.active { color: var(--primary-color); background: rgba(var(--rgb-primary-color, 3,169,244), 0.12); }
-  .mc-panel { padding: 12px; }
-  .mc-error { display: flex; align-items: center; gap: 8px; margin: 0 12px; padding: 8px 12px;
-    background: var(--error-color, #db4437); color: #fff; border-radius: 8px; }
-  .mc-error button { background: none; border: none; color: #fff; margin-left: auto; cursor: pointer; }
-  .mc-search { width: 100%; box-sizing: border-box; padding: 8px 12px; border-radius: 8px;
-    border: 1px solid var(--divider-color); font: inherit; margin-bottom: 12px; }
-  .mc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
-  .mc-tile { cursor: pointer; border-radius: 12px; overflow: hidden; background: var(--card-background-color);
-    border: 1px solid var(--divider-color); }
-  .mc-tile img { width: 100%; height: 100px; object-fit: cover; display: block; background: var(--divider-color); }
-  .mc-tile .mc-name { padding: 6px 8px; font-size: 0.9em; }
-  .mc-detail { margin-top: 10px; padding: 12px; border-radius: 12px; background: var(--card-background-color);
-    border: 1px solid var(--divider-color); }
-  .mc-detail img { width: 100%; max-height: 220px; object-fit: cover; border-radius: 8px; margin-bottom: 8px; }
-  .mc-detail h3 { margin: 0 0 8px; }
-  .mc-detail h4 { margin: 12px 0 4px; }
-  .mc-detail ul, .mc-detail ol { margin: 0; padding-left: 20px; }
+<style>
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  :host {
+    display: block;
+    --mc-radius-lg: 26px;
+    --mc-radius-md: 16px;
+    --mc-radius-sm: 10px;
+    --mc-blur: 26px;
+    --mc-accent-rgb: 10, 132, 255;
+    --mc-accent: var(--primary-color, rgb(var(--mc-accent-rgb)));
+    --mc-soft: rgba(128, 128, 128, 0.10);
+    --mc-line: rgba(128, 128, 128, 0.18);
+    font-family: var(--paper-font-body1_-_font-family, -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif);
+  }
+  ha-card {
+    position: relative; overflow: hidden; border-radius: var(--mc-radius-lg);
+    background: color-mix(in srgb, var(--card-background-color, #1c1c1e) 55%, transparent);
+    backdrop-filter: blur(var(--mc-blur)) saturate(160%);
+    -webkit-backdrop-filter: blur(var(--mc-blur)) saturate(160%);
+    border: 1px solid color-mix(in srgb, var(--divider-color, #8e8e93) 55%, transparent);
+    box-shadow: 0 20px 45px rgba(0, 0, 0, 0.16), inset 0 1px 1px rgba(255, 255, 255, 0.12);
+  }
+  ha-card::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0.6;
+    background: linear-gradient(120deg, rgba(255,255,255,0.30), rgba(255,255,255,0.05) 35%, transparent 60%);
+  }
+  .mc-root { position: relative; z-index: 1; display: flex; flex-direction: column; }
+  .mc-header { display: flex; align-items: center; gap: 10px; padding: 18px 18px 6px; }
+  .mc-title { flex: 1; font-size: 1.35em; font-weight: 700; letter-spacing: -0.01em; color: var(--primary-text-color); }
+  .mc-error {
+    display: flex; align-items: center; gap: 8px; margin: 10px 16px 0; padding: 10px 14px;
+    border-radius: var(--mc-radius-sm); color: white; font-size: 0.9em;
+    background: color-mix(in srgb, var(--error-color, #db4437) 85%, transparent);
+  }
+  .mc-error button { margin-left: auto; background: none; border: none; color: inherit; font-size: 1.1em; cursor: pointer; }
+
+  .mc-nav { display: flex; gap: 4px; margin: 8px 16px 0; padding: 4px; border-radius: 999px;
+    background: color-mix(in srgb, var(--primary-text-color) 6%, transparent); }
+  .mc-nav-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: 40px; border: none; border-radius: 999px; background: none; cursor: pointer;
+    font-size: 0.9em; font-weight: 600; color: var(--secondary-text-color); }
+  .mc-nav-btn ha-icon { --mdc-icon-size: 18px; }
+  .mc-nav-btn.active { color: white; background: color-mix(in srgb, var(--mc-accent) 92%, transparent);
+    box-shadow: 0 2px 8px rgba(var(--mc-accent-rgb), 0.4); }
+
+  .mc-panel { padding: 14px 16px 18px; }
+  .mc-empty, .mc-loading { padding: 26px 8px; text-align: center; color: var(--secondary-text-color); font-size: 0.92em; line-height: 1.5; }
+
+  .mc-searchbar { display: flex; gap: 8px; margin: 0 0 14px; }
+  .mc-searchbar input { flex: 1; min-width: 0; min-height: 44px; padding: 10px 16px; border-radius: 999px;
+    font-size: 16px; color: var(--primary-text-color); background: var(--mc-soft); border: 1px solid var(--mc-line); }
+  .mc-searchbar input:focus { outline: 2px solid color-mix(in srgb, var(--mc-accent) 60%, transparent); }
+
+  .mc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px;
+    padding: 10px 18px; border: none; border-radius: 999px; cursor: pointer; font-size: 0.95em; font-weight: 600;
+    color: white; background: color-mix(in srgb, var(--mc-accent) 92%, transparent);
+    box-shadow: 0 2px 8px rgba(var(--mc-accent-rgb), 0.35); transition: transform 0.1s ease; }
+  .mc-btn:active { transform: scale(0.96); }
+  .mc-btn:disabled { opacity: 0.5; transform: none; box-shadow: none; cursor: default; }
+  .mc-btn.secondary { color: var(--primary-text-color); background: var(--mc-soft); border: 1px solid var(--mc-line); box-shadow: none; }
+  .mc-btn.round { width: 48px; min-width: 48px; padding: 0; }
+  .mc-btn ha-icon { --mdc-icon-size: 22px; }
+  .mc-btn.block { width: 100%; }
+
+  /* Recipe grid — every tile is the same height regardless of name length */
+  .mc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px 12px; }
+  .mc-tile { cursor: pointer; min-width: 0; -webkit-tap-highlight-color: transparent; }
+  .mc-cover { position: relative; aspect-ratio: 4 / 3; border-radius: var(--mc-radius-sm); overflow: hidden;
+    background: var(--mc-soft); box-shadow: 0 6px 16px rgba(0,0,0,0.22); }
+  .mc-cover img { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: cover; display: block; }
+  .mc-cover .mc-cover-fallback { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    padding: 8px; text-align: center; font-size: 0.75em; color: var(--secondary-text-color); }
+  .mc-tile-title { margin-top: 6px; font-size: 0.86em; font-weight: 600; line-height: 1.25; color: var(--primary-text-color);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+  /* Dialog: native <dialog> + showModal() → top layer, near-fullscreen on phones */
+  .mc-dialog { padding: 0; border: none; background: transparent; max-width: 100vw; max-height: 100dvh; color: var(--primary-text-color); }
+  .mc-dialog::backdrop { background: rgba(0,0,0,0.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  .mc-sheet { position: relative; width: min(720px, 100vw); height: min(900px, 100dvh); overflow: hidden; display: flex; flex-direction: column;
+    border-radius: var(--mc-radius-lg); background: color-mix(in srgb, var(--card-background-color, #1c1c1e) 94%, transparent);
+    box-shadow: 0 30px 60px rgba(0,0,0,0.45); }
+  .mc-sheet-scroll { overflow-y: auto; padding: 18px 18px calc(18px + env(safe-area-inset-bottom)); }
+  .mc-sheet-close { position: absolute; top: 10px; right: 10px; z-index: 3; }
+  .mc-banner { position: absolute; left: 0; right: 0; top: 0; height: 240px; background-size: cover; background-position: center;
+    filter: blur(28px) saturate(140%); opacity: 0.5; transform: scale(1.2);
+    mask-image: linear-gradient(to bottom, black, transparent); -webkit-mask-image: linear-gradient(to bottom, black, transparent); }
+  .mc-detail-cover { position: relative; z-index: 1; aspect-ratio: 16 / 9; border-radius: var(--mc-radius-md); overflow: hidden;
+    background: var(--mc-soft); box-shadow: 0 6px 16px rgba(0,0,0,0.22); margin-bottom: 14px; }
+  .mc-detail-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .mc-detail-title { position: relative; z-index: 1; font-size: 1.4em; font-weight: 700; color: var(--primary-text-color); margin-bottom: 10px; }
+  .mc-detail h4 { font-size: 0.8em; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--secondary-text-color); margin: 18px 0 8px; }
+  .mc-detail ul, .mc-detail ol { margin: 0; padding-left: 20px; line-height: 1.6; }
+
   .mc-import-row { display: flex; gap: 8px; }
-  .mc-import-row input { flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--divider-color); font: inherit; }
-  .mc-import-row button { padding: 10px 16px; border-radius: 8px; border: none; background: var(--primary-color);
-    color: var(--text-primary-color, #fff); font: inherit; cursor: pointer; }
-  .mc-import-row button:disabled { opacity: 0.6; cursor: default; }
-  .mc-hint { color: var(--secondary-text-color); font-size: 0.9em; margin-top: 8px; }
-  .mc-empty { color: var(--secondary-text-color); padding: 24px 0; text-align: center; }
+  .mc-import-row input { flex: 1; min-height: 44px; padding: 10px 16px; border-radius: 999px; font-size: 16px;
+    color: var(--primary-text-color); background: var(--mc-soft); border: 1px solid var(--mc-line); }
+  .mc-hint { color: var(--secondary-text-color); font-size: 0.9em; margin-top: 10px; line-height: 1.5; }
+</style>
 `;
 
 class MealieHubCard extends HTMLElement {
@@ -80,14 +156,16 @@ class MealieHubCard extends HTMLElement {
     this._config = { ...DEFAULT_CONFIG };
     this._hass = null;
     this._connected = false;
+    this._skeletonReady = false;
     this._activeTab = DEFAULT_CONFIG.default_tab;
     this._error = null;
+    this._signed = new Map(); // path -> Promise<signed path>
 
     this._recipes = [];
     this._recipesLoaded = false;
     this._search = "";
-    this._openSlug = null;
-    this._detail = null; // slug -> recipe (only the open one is kept)
+    this._detailSlug = null;
+    this._detail = null;
 
     this._importUrl = "";
     this._importBusy = false;
@@ -111,20 +189,37 @@ class MealieHubCard extends HTMLElement {
     if (this._connected) this._render();
   }
 
+  _eventRoots() {
+    return [this.shadowRoot, this._overlayRoot].filter(Boolean);
+  }
+
   connectedCallback() {
     this._connected = true;
-    this.shadowRoot.addEventListener("click", this._handleClick);
-    this.shadowRoot.addEventListener("input", this._handleInput);
-    this.shadowRoot.addEventListener("submit", this._handleSubmit);
+    clearTimeout(this._overlayCleanupTimer);
+    this._ensureSkeleton();
+    if (!this._overlay.isConnected) document.body.appendChild(this._overlay);
+    for (const root of this._eventRoots()) {
+      root.addEventListener("click", this._handleClick);
+      root.addEventListener("input", this._handleInput);
+      root.addEventListener("submit", this._handleSubmit);
+    }
     this._render();
     if (this._hass) this._loadRecipes();
   }
 
   disconnectedCallback() {
     this._connected = false;
-    this.shadowRoot.removeEventListener("click", this._handleClick);
-    this.shadowRoot.removeEventListener("input", this._handleInput);
-    this.shadowRoot.removeEventListener("submit", this._handleSubmit);
+    for (const root of this._eventRoots()) {
+      root.removeEventListener("click", this._handleClick);
+      root.removeEventListener("input", this._handleInput);
+      root.removeEventListener("submit", this._handleSubmit);
+    }
+    // A re-insert (HA sections view, companion app) comes back within the same
+    // frame; only a card that is really gone releases its overlay.
+    clearTimeout(this._overlayCleanupTimer);
+    this._overlayCleanupTimer = setTimeout(() => {
+      if (!this._connected) this._overlay?.remove();
+    }, 30000);
   }
 
   getCardSize() {
@@ -137,6 +232,37 @@ class MealieHubCard extends HTMLElement {
 
   static getStubConfig() {
     return { ...DEFAULT_CONFIG };
+  }
+
+  // ── Skeleton / overlay (dialog lives on <body>, not inside the card:
+  // HA's dashboard layouts detach and re-insert card elements, and a modal
+  // <dialog> moved like that silently drops out of the top layer) ───────
+
+  _ensureSkeleton() {
+    if (this._skeletonReady) return;
+    this._skeletonReady = true;
+    this.shadowRoot.innerHTML = `${STYLE}<ha-card><div class="mc-root" id="mc-shell"></div></ha-card>`;
+    this._shellEl = this.shadowRoot.getElementById("mc-shell");
+
+    this._overlay = document.createElement("div");
+    this._overlay.className = "mealie-hub-card-overlay";
+    const overlayRoot = this._overlay.attachShadow({ mode: "open" });
+    overlayRoot.innerHTML = `${STYLE}<dialog class="mc-dialog" id="mc-detail"></dialog>`;
+    this._overlayRoot = overlayRoot;
+    document.body.appendChild(this._overlay);
+    this._detailDialog = overlayRoot.getElementById("mc-detail");
+
+    this._detailDialog.addEventListener("click", (ev) => {
+      if (ev.target !== this._detailDialog) return;
+      const r = this._detailDialog.getBoundingClientRect();
+      const inside = ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+      if (!inside) this._detailDialog.close();
+    });
+    this._detailDialog.addEventListener("close", () => {
+      this._detailSlug = null;
+      this._detail = null;
+      this._render();
+    });
   }
 
   // ── Networking ──────────────────────────────────────────────────────
@@ -157,6 +283,46 @@ class MealieHubCard extends HTMLElement {
     }
   }
 
+  // <img> can't send a bearer header, so recipe images get HA signed paths.
+  _sign(path) {
+    if (!this._signed.has(path)) {
+      const p = this._hass
+        .callWS({ type: "auth/sign_path", path, expires: SIGN_EXPIRY_SECONDS })
+        .then((r) => r.path)
+        .catch((err) => {
+          this._signed.delete(path);
+          throw err;
+        });
+      this._signed.set(path, p);
+    }
+    return this._signed.get(path);
+  }
+
+  _hydrateCovers(root) {
+    root.querySelectorAll("img[data-cover]").forEach((img) => {
+      const path = img.dataset.cover;
+      const cached = this._signedCache?.get(path);
+      if (cached) {
+        if (img.getAttribute("src") !== cached) img.setAttribute("src", cached);
+        return;
+      }
+      this._sign(path)
+        .then((signed) => {
+          this._signedCache = this._signedCache || new Map();
+          this._signedCache.set(path, signed);
+          img.setAttribute("src", signed);
+        })
+        .catch(() => img.remove());
+    });
+  }
+
+  _coverHtml(recipeId, title) {
+    return `<div class="mc-cover">
+      <div class="mc-cover-fallback">${esc(title)}</div>
+      ${recipeId ? `<img data-cover="/api/mealie_hub/recipes/${esc(recipeId)}/image" alt="" loading="lazy" onerror="this.remove()">` : ""}
+    </div>`;
+  }
+
   async _loadRecipes() {
     try {
       const data = await this._api("GET", "mealie_hub/recipes");
@@ -170,18 +336,16 @@ class MealieHubCard extends HTMLElement {
   }
 
   async _openDetail(slug) {
-    if (this._openSlug === slug) {
-      this._openSlug = null;
-      this._render();
-      return;
-    }
-    this._openSlug = slug;
+    this._detailSlug = slug;
     this._detail = null;
     this._render();
     try {
       this._detail = await this._api("GET", `mealie_hub/recipes/${encodeURIComponent(slug)}`);
     } catch (err) {
       this._error = errMessage(err);
+      this._detailDialog.close();
+      this._render();
+      return;
     }
     this._render();
   }
@@ -246,9 +410,8 @@ class MealieHubCard extends HTMLElement {
     this._openDetail(el.dataset.slug);
   }
 
-  _onAction_refresh() {
-    this._recipesLoaded = false;
-    this._loadRecipes();
+  _onAction_closeDialog() {
+    this._detailDialog.close();
   }
 
   _onInput_search(el) {
@@ -267,16 +430,9 @@ class MealieHubCard extends HTMLElement {
   // ── Rendering ────────────────────────────────────────────────────────
 
   _render() {
-    if (!this.shadowRoot.firstChild) {
-      const style = document.createElement("style");
-      style.textContent = STYLE;
-      this.shadowRoot.appendChild(style);
-      const root = document.createElement("div");
-      root.className = "mc-card";
-      this.shadowRoot.appendChild(root);
-    }
-    const root = this.shadowRoot.querySelector(".mc-card");
-    root.innerHTML = `
+    if (!this._skeletonReady) return;
+    this._shellEl.innerHTML = `
+      <div class="mc-header"><div class="mc-title">${esc(this._config.title)}</div></div>
       <div class="mc-nav">
         ${TABS.map(
           (t) => `<button class="mc-nav-btn ${t.key === this._activeTab ? "active" : ""}" data-action="switchTab" data-tab="${t.key}">
@@ -287,45 +443,61 @@ class MealieHubCard extends HTMLElement {
           <button data-action="dismissError">✕</button></div>` : ""}
       <div class="mc-panel">${this._activeTab === "import" ? this._renderImport() : this._renderLibrary()}</div>
     `;
+    this._hydrateCovers(this._shellEl);
+
+    if (this._detailSlug) {
+      const html = this._renderDetail();
+      if (html !== this._detailDialog._html) {
+        this._detailDialog._html = html;
+        this._detailDialog.innerHTML = html;
+      }
+      if (!this._detailDialog.open) this._detailDialog.showModal();
+      this._hydrateCovers(this._overlayRoot);
+    } else if (this._detailDialog?.open) {
+      this._detailDialog.close();
+    }
   }
 
   _renderLibrary() {
-    if (!this._recipesLoaded) return `<div class="mc-empty">Lädt …</div>`;
+    if (!this._recipesLoaded) return `<div class="mc-loading">Lädt …</div>`;
     const q = this._search.trim().toLowerCase();
     const shown = q ? this._recipes.filter((r) => (r.name || "").toLowerCase().includes(q)) : this._recipes;
     if (!this._recipes.length) return `<div class="mc-empty">Noch keine Rezepte in Mealie.</div>`;
     return `
-      <input class="mc-search" data-input="search" placeholder="Rezepte durchsuchen …" value="${esc(this._search)}">
+      <div class="mc-searchbar"><input data-input="search" placeholder="Rezepte durchsuchen …" value="${esc(this._search)}"></div>
       <div class="mc-grid">${shown.map((r) => this._renderTile(r)).join("")}</div>
       ${shown.length === 0 ? `<div class="mc-empty">Keine Treffer.</div>` : ""}
     `;
   }
 
   _renderTile(recipe) {
-    const open = this._openSlug === recipe.slug;
-    return `
-      <div>
-        <div class="mc-tile" data-action="openRecipe" data-slug="${esc(recipe.slug)}">
-          ${recipe.image_url ? `<img src="${esc(recipe.image_url)}" loading="lazy">` : ""}
-          <div class="mc-name">${esc(recipe.name)}</div>
-        </div>
-        ${open ? this._renderDetail() : ""}
-      </div>
-    `;
+    return `<div class="mc-tile" data-action="openRecipe" data-slug="${esc(recipe.slug)}">
+      ${this._coverHtml(recipe.id, recipe.name)}
+      <div class="mc-tile-title">${esc(recipe.name)}</div>
+    </div>`;
   }
 
   _renderDetail() {
-    if (!this._detail) return `<div class="mc-detail">Lädt …</div>`;
-    const ingredients = this._detail.recipeIngredient || [];
-    const steps = (this._detail.recipeInstructions || []).map((s) => (typeof s === "string" ? s : s.text || ""));
-    return `
-      <div class="mc-detail">
-        ${this._detail.image_url ? `<img src="${esc(this._detail.image_url)}">` : ""}
-        <h3>${esc(this._detail.name)}</h3>
+    const close = `<button class="mc-btn secondary round mc-sheet-close" data-action="closeDialog" aria-label="Schließen"><ha-icon icon="mdi:close"></ha-icon></button>`;
+    const item = this._detail;
+    if (!item) return `<div class="mc-sheet">${close}<div class="mc-sheet-scroll"><div class="mc-loading">Lädt …</div></div></div>`;
+    const ingredients = item.recipeIngredient || [];
+    const steps = (item.recipeInstructions || []).map((s) => (typeof s === "string" ? s : s.text || ""));
+    const coverPath = `/api/mealie_hub/recipes/${item.id}/image`;
+    const cachedCover = this._signedCache?.get(coverPath);
+    return `<div class="mc-sheet mc-detail">
+      ${close}
+      <div class="mc-banner" style="${cachedCover ? `background-image:url('${esc(cachedCover)}')` : ""}"></div>
+      <div class="mc-sheet-scroll">
+        <div class="mc-detail-cover">
+          <div class="mc-cover-fallback">${esc(item.name)}</div>
+          ${item.id ? `<img data-cover="${esc(coverPath)}" alt="" onerror="this.remove()">` : ""}
+        </div>
+        <div class="mc-detail-title">${esc(item.name)}</div>
         ${ingredients.length ? `<h4>Zutaten</h4><ul>${ingredients.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : ""}
         ${steps.length ? `<h4>Zubereitung</h4><ol>${steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>` : ""}
       </div>
-    `;
+    </div>`;
   }
 
   _renderImport() {
@@ -334,7 +506,7 @@ class MealieHubCard extends HTMLElement {
       <form data-form="import" class="mc-import-row">
         <input data-input="importUrl" placeholder="Link zu einem Rezept oder Insta/TikTok-Video" value="${esc(this._importUrl)}"
           ${this._importBusy ? "disabled" : ""}>
-        <button type="submit" ${this._importBusy ? "disabled" : ""}>${this._importBusy ? "Lädt …" : "Importieren"}</button>
+        <button type="submit" class="mc-btn" ${this._importBusy ? "disabled" : ""}>${this._importBusy ? "Lädt …" : "Importieren"}</button>
       </form>
       ${
         result && result.slug
