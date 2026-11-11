@@ -5,7 +5,7 @@
   window.calls = [];
   window.scenario = {
     recipes: { items: [{ id: "r1", slug: "soup", name: "Suppe", image_url: "/img/r1" }] },
-    detail: { soup: { id: "r1", slug: "soup", name: "Suppe", image_url: "/img/r1", recipeIngredient: ["1 Zwiebel"], recipeInstructions: [{ text: "Zwiebel schneiden." }] } },
+    detail: { soup: { id: "r1", slug: "soup", name: "Suppe", image_url: "/img/r1", recipeIngredient: [{ quantity: 1, unit: { name: "Stück" }, food: { name: "Zwiebel" }, note: "", display: "1 Stück Zwiebel" }], recipeInstructions: [{ text: "Zwiebel schneiden." }] } },
     import: { ok: true, slug: "soup" },
   };
   window.hassStub = {

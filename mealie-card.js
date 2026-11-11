@@ -35,6 +35,15 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Mealie's own API returns structured ingredient objects (quantity/unit/food/note),
+// not plain strings — `display` is Mealie's own pre-rendered text for exactly this.
+function ingredientText(ing) {
+  if (typeof ing === "string") return ing;
+  if (ing && typeof ing.display === "string" && ing.display) return ing.display;
+  if (ing && typeof ing.note === "string" && ing.note) return ing.note;
+  return "";
+}
+
 function errMessage(err) {
   const body = err && err.body;
   if (body && typeof body.error === "string") return body.error;
@@ -481,7 +490,7 @@ class MealieHubCard extends HTMLElement {
     const close = `<button class="mc-btn secondary round mc-sheet-close" data-action="closeDialog" aria-label="Schließen"><ha-icon icon="mdi:close"></ha-icon></button>`;
     const item = this._detail;
     if (!item) return `<div class="mc-sheet">${close}<div class="mc-sheet-scroll"><div class="mc-loading">Lädt …</div></div></div>`;
-    const ingredients = item.recipeIngredient || [];
+    const ingredients = (item.recipeIngredient || []).map(ingredientText).filter(Boolean);
     const steps = (item.recipeInstructions || []).map((s) => (typeof s === "string" ? s : s.text || ""));
     const coverPath = `/api/mealie_hub/recipes/${item.id}/image`;
     const cachedCover = this._signedCache?.get(coverPath);
