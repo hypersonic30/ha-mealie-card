@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const CARD_VERSION = "0.2.1";
+const CARD_VERSION = "0.3.0";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
@@ -26,8 +26,11 @@ const DEFAULT_CONFIG = {
 
 const TABS = [
   { key: "library", label: "Bibliothek", icon: "mdi:book-open-variant" },
+  { key: "shopping", label: "Einkaufsliste", icon: "mdi:cart-outline" },
   { key: "import", label: "Importieren", icon: "mdi:link-plus" },
 ];
+
+const IMPORT_HISTORY_MAX = 10;
 
 const SIGN_EXPIRY_SECONDS = 24 * 3600;
 
@@ -147,7 +150,7 @@ const STYLE = `
     background: var(--mc-soft); box-shadow: 0 6px 16px rgba(0,0,0,0.22); margin-bottom: 14px; }
   .mc-detail-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .mc-detail-title { position: relative; z-index: 1; font-size: 1.4em; font-weight: 700; color: var(--primary-text-color); margin-bottom: 10px; }
-  .mc-detail h4 { font-size: 0.8em; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  .mc-detail h4, .mc-panel h4 { font-size: 0.8em; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
     color: var(--secondary-text-color); margin: 18px 0 8px; }
   .mc-detail ul, .mc-detail ol { margin: 0; padding-left: 20px; line-height: 1.6; }
 
@@ -155,6 +158,39 @@ const STYLE = `
   .mc-import-row input { flex: 1; min-height: 44px; padding: 10px 16px; border-radius: 999px; font-size: 16px;
     color: var(--primary-text-color); background: var(--mc-soft); border: 1px solid var(--mc-line); }
   .mc-hint { color: var(--secondary-text-color); font-size: 0.9em; margin-top: 10px; line-height: 1.5; }
+
+  .mc-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; margin-bottom: 14px; scrollbar-width: none; }
+  .mc-chip { flex: 0 0 auto; min-height: 34px; padding: 6px 14px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--mc-line); background: var(--mc-soft); color: var(--primary-text-color);
+    font-size: 0.85em; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+  .mc-chip.active { background: color-mix(in srgb, var(--mc-accent) 90%, transparent); color: white; border-color: transparent; }
+  .mc-chip.removable ha-icon { --mdc-icon-size: 14px; margin-left: 2px; }
+  .mc-tag-add { display: flex; gap: 6px; margin-top: 6px; }
+  .mc-tag-add input { flex: 1; min-height: 38px; padding: 6px 12px; border-radius: 999px; font-size: 0.9em;
+    color: var(--primary-text-color); background: var(--mc-soft); border: 1px solid var(--mc-line); }
+
+  /* Import tab: current job, queue, recent history */
+  .mc-job { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--mc-radius-md);
+    background: color-mix(in srgb, var(--mc-accent) 14%, transparent); border: 1px solid color-mix(in srgb, var(--mc-accent) 35%, transparent);
+    margin-top: 12px; }
+  .mc-job-url { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.9em; }
+  .mc-job-time { color: var(--secondary-text-color); font-size: 0.85em; flex: 0 0 auto; }
+  .mc-spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--mc-line);
+    border-top-color: var(--mc-accent); animation: mc-spin 0.8s linear infinite; flex: 0 0 auto; }
+  @keyframes mc-spin { to { transform: rotate(360deg); } }
+  .mc-queue { margin-top: 10px; }
+  .mc-queue-item, .mc-history-item { display: flex; align-items: center; gap: 8px; padding: 6px 2px; font-size: 0.88em; }
+  .mc-queue-item span, .mc-history-item span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mc-history-item.ok { color: var(--success-color, #43a047); }
+  .mc-history-item.err { color: var(--error-color, #db4437); }
+  .mc-queue-item button { background: none; border: none; color: var(--secondary-text-color); cursor: pointer; }
+
+  /* Shopping list */
+  .mc-shopping-list { display: flex; flex-direction: column; gap: 2px; }
+  .mc-shopping-item { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--mc-line); cursor: pointer; }
+  .mc-shopping-item input[type=checkbox] { width: 22px; height: 22px; flex: 0 0 auto; }
+  .mc-shopping-item span { flex: 1; }
+  .mc-shopping-item.checked span { color: var(--secondary-text-color); text-decoration: line-through; }
 </style>
 `;
 
@@ -175,16 +211,32 @@ class MealieHubCard extends HTMLElement {
     this._search = "";
     this._detailSlug = null;
     this._detail = null;
+    this._showDetailHint = null;
+
+    this._tags = []; // [{name, slug}] from /api/mealie_hub/tags
+    this._tagFilter = null; // selected tag slug, or null for "Alle"
+    this._tagDraft = ""; // the detail dialog's "add tag" input
+
+    this._shoppingItems = [];
+    this._shoppingLoaded = false;
+    this._shoppingError = null;
+    this._addToListBusy = false;
 
     this._importUrl = "";
-    this._importBusy = false;
-    this._importResult = null; // {slug} | {error}
+    this._importRunning = null; // the URL currently being imported, or null
+    this._importStartedAt = 0;
+    this._importQueue = []; // URLs waiting their turn
+    this._importHistory = []; // [{url, slug, error}], newest first
+    this._importTickTimer = null;
   }
 
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
-    if (first && this._connected) this._loadRecipes();
+    if (first && this._connected) {
+      this._loadRecipes();
+      this._loadTags();
+    }
   }
 
   get hass() {
@@ -213,7 +265,10 @@ class MealieHubCard extends HTMLElement {
       root.addEventListener("submit", this._handleSubmit);
     }
     this._render();
-    if (this._hass) this._loadRecipes();
+    if (this._hass) {
+      this._loadRecipes();
+      this._loadTags();
+    }
   }
 
   disconnectedCallback() {
@@ -333,8 +388,9 @@ class MealieHubCard extends HTMLElement {
   }
 
   async _loadRecipes() {
+    const path = this._tagFilter ? `mealie_hub/recipes?tags=${encodeURIComponent(this._tagFilter)}` : "mealie_hub/recipes";
     try {
-      const data = await this._api("GET", "mealie_hub/recipes");
+      const data = await this._api("GET", path);
       this._recipes = data.items || [];
       this._recipesLoaded = true;
       this._error = null;
@@ -344,9 +400,98 @@ class MealieHubCard extends HTMLElement {
     this._render();
   }
 
+  async _loadTags() {
+    try {
+      const data = await this._api("GET", "mealie_hub/tags");
+      this._tags = data.items || [];
+    } catch (err) {
+      this._error = errMessage(err);
+    }
+    this._render();
+  }
+
+  _setTagFilter(slug) {
+    slug = slug || null;
+    this._tagFilter = this._tagFilter === slug ? null : slug;
+    this._recipesLoaded = false;
+    this._loadRecipes();
+  }
+
+  async _loadShoppingList() {
+    try {
+      const data = await this._api("GET", "mealie_hub/shopping-list");
+      this._shoppingItems = data.items || [];
+      this._shoppingLoaded = true;
+      this._shoppingError = null;
+    } catch (err) {
+      this._shoppingError = err?.body?.error === "no_shopping_list"
+        ? "Lege in Mealie zuerst eine Einkaufsliste an."
+        : errMessage(err);
+      this._shoppingLoaded = true;
+    }
+    this._render();
+  }
+
+  async _toggleShoppingItem(itemId) {
+    const item = this._shoppingItems.find((i) => i.id === itemId);
+    if (!item) return;
+    const before = item.checked;
+    item.checked = !before;
+    this._render();
+    try {
+      await this._api("PUT", `mealie_hub/shopping-list/items/${encodeURIComponent(itemId)}`, { checked: item.checked });
+    } catch (err) {
+      item.checked = before;
+      this._error = errMessage(err);
+      this._render();
+    }
+  }
+
+  async _addToShoppingList(recipeId) {
+    this._addToListBusy = true;
+    this._render();
+    try {
+      await this._api("POST", `mealie_hub/recipes/${encodeURIComponent(recipeId)}/shopping-list`);
+      this._shoppingLoaded = false; // refetched next time the tab opens
+      this._showDetailHint = "Zur Einkaufsliste hinzugefügt.";
+    } catch (err) {
+      this._showDetailHint = `Fehler: ${errMessage(err)}`;
+    }
+    this._addToListBusy = false;
+    this._render();
+  }
+
+  async _saveTags(slug, tags) {
+    try {
+      const result = await this._api("PATCH", `mealie_hub/recipes/${encodeURIComponent(slug)}/tags`, { tags });
+      if (this._detail && this._detail.slug === slug) this._detail.tags = result.tags || tags.map((t) => ({ name: t }));
+      this._loadTags();
+    } catch (err) {
+      this._error = errMessage(err);
+    }
+    this._render();
+  }
+
+  _addTag() {
+    const name = this._tagDraft.trim();
+    if (!name || !this._detail) return;
+    const names = (this._detail.tags || []).map((t) => t.name);
+    if (names.includes(name)) return;
+    this._tagDraft = "";
+    this._saveTags(this._detail.slug, [...names, name]);
+  }
+
+  _removeTag(name) {
+    if (!this._detail) return;
+    const names = (this._detail.tags || []).map((t) => t.name).filter((n) => n !== name);
+    this._saveTags(this._detail.slug, names);
+  }
+
   async _openDetail(slug) {
     this._detailSlug = slug;
     this._detail = null;
+    this._tagDraft = "";
+    this._showDetailHint = null;
     this._render();
     try {
       this._detail = await this._api("GET", `mealie_hub/recipes/${encodeURIComponent(slug)}`);
@@ -359,23 +504,52 @@ class MealieHubCard extends HTMLElement {
     this._render();
   }
 
-  async _submitImport() {
+  // Imports run one at a time: submitting while one is already running queues
+  // it instead, so several links can be pasted in quick succession and each
+  // one's turn (and the current one's progress) stays visible.
+  _submitImport() {
     const url = this._importUrl.trim();
     if (!url) return;
-    this._importBusy = true;
-    this._importResult = null;
+    this._importUrl = "";
+    if (this._importRunning) {
+      this._importQueue.push(url);
+    } else {
+      this._startImport(url);
+    }
     this._render();
+  }
+
+  _cancelQueued(url) {
+    const i = this._importQueue.indexOf(url);
+    if (i >= 0) this._importQueue.splice(i, 1);
+    this._render();
+  }
+
+  async _startImport(url) {
+    this._importRunning = url;
+    this._importStartedAt = Date.now();
+    clearInterval(this._importTickTimer);
+    this._importTickTimer = setInterval(() => this._render(), 1000);
+    this._render();
+    let entry;
     try {
       const result = await this._api("POST", "mealie_hub/import", { url });
-      this._importResult = { slug: result.slug };
-      this._importUrl = "";
+      entry = { url, slug: result.slug };
       this._recipesLoaded = false; // the new recipe should show up next time the library is opened
       this._loadRecipes();
     } catch (err) {
-      this._importResult = { error: errMessage(err) };
+      entry = { url, error: errMessage(err) };
     }
-    this._importBusy = false;
-    this._render();
+    this._importHistory.unshift(entry);
+    this._importHistory.length = Math.min(this._importHistory.length, IMPORT_HISTORY_MAX);
+    clearInterval(this._importTickTimer);
+    this._importRunning = null;
+    const next = this._importQueue.shift();
+    if (next) {
+      this._startImport(next);
+    } else {
+      this._render();
+    }
   }
 
   // ── Delegated events ─────────────────────────────────────────────────
@@ -407,6 +581,7 @@ class MealieHubCard extends HTMLElement {
 
   _onAction_switchTab(el) {
     this._activeTab = el.dataset.tab;
+    if (this._activeTab === "shopping" && !this._shoppingLoaded) this._loadShoppingList();
     this._render();
   }
 
@@ -436,6 +611,34 @@ class MealieHubCard extends HTMLElement {
     this._submitImport();
   }
 
+  _onAction_cancelQueued(el) {
+    this._cancelQueued(el.dataset.url);
+  }
+
+  _onAction_selectTag(el) {
+    this._setTagFilter(el.dataset.slug);
+  }
+
+  _onAction_toggleShoppingItem(el) {
+    this._toggleShoppingItem(el.dataset.id);
+  }
+
+  _onAction_addToShoppingList() {
+    if (this._detail) this._addToShoppingList(this._detail.id);
+  }
+
+  _onAction_removeTag(el) {
+    this._removeTag(el.dataset.name);
+  }
+
+  _onInput_tagDraft(el) {
+    this._tagDraft = el.value;
+  }
+
+  _onAction_addTag() {
+    this._addTag();
+  }
+
   // ── Rendering ────────────────────────────────────────────────────────
 
   _render() {
@@ -450,7 +653,9 @@ class MealieHubCard extends HTMLElement {
       </div>
       ${this._error ? `<div class="mc-error"><ha-icon icon="mdi:alert-circle"></ha-icon><span>${esc(this._error)}</span>
           <button data-action="dismissError">✕</button></div>` : ""}
-      <div class="mc-panel">${this._activeTab === "import" ? this._renderImport() : this._renderLibrary()}</div>
+      <div class="mc-panel">${
+        this._activeTab === "import" ? this._renderImport() : this._activeTab === "shopping" ? this._renderShoppingList() : this._renderLibrary()
+      }</div>
     `;
     this._hydrateCovers(this._shellEl);
 
@@ -468,12 +673,21 @@ class MealieHubCard extends HTMLElement {
   }
 
   _renderLibrary() {
-    if (!this._recipesLoaded) return `<div class="mc-loading">Lädt …</div>`;
+    const chips = this._tags.length
+      ? `<div class="mc-chips">
+          <button class="mc-chip ${!this._tagFilter ? "active" : ""}" data-action="selectTag" data-slug="">Alle</button>
+          ${this._tags
+            .map((t) => `<button class="mc-chip ${this._tagFilter === t.slug ? "active" : ""}" data-action="selectTag" data-slug="${esc(t.slug)}">${esc(t.name)}</button>`)
+            .join("")}
+        </div>`
+      : "";
+    if (!this._recipesLoaded) return `${chips}<div class="mc-loading">Lädt …</div>`;
     const q = this._search.trim().toLowerCase();
     const shown = q ? this._recipes.filter((r) => (r.name || "").toLowerCase().includes(q)) : this._recipes;
-    if (!this._recipes.length) return `<div class="mc-empty">Noch keine Rezepte in Mealie.</div>`;
+    if (!this._recipes.length) return `${chips}<div class="mc-empty">Noch keine Rezepte in Mealie.</div>`;
     return `
       <div class="mc-searchbar"><input data-input="search" placeholder="Rezepte durchsuchen …" value="${esc(this._search)}"></div>
+      ${chips}
       <div class="mc-grid">${shown.map((r) => this._renderTile(r)).join("")}</div>
       ${shown.length === 0 ? `<div class="mc-empty">Keine Treffer.</div>` : ""}
     `;
@@ -503,26 +717,75 @@ class MealieHubCard extends HTMLElement {
           ${item.id ? `<img data-cover="${esc(coverPath)}" alt="" onerror="this.remove()">` : ""}
         </div>
         <div class="mc-detail-title">${esc(item.name)}</div>
+        <div class="mc-chips">
+          ${(item.tags || [])
+            .map((t) => `<button class="mc-chip removable" data-action="removeTag" data-name="${esc(t.name)}">${esc(t.name)}<ha-icon icon="mdi:close"></ha-icon></button>`)
+            .join("")}
+        </div>
+        <div class="mc-tag-add">
+          <input data-input="tagDraft" placeholder="Tag hinzufügen …" value="${esc(this._tagDraft)}">
+          <button class="mc-btn secondary" data-action="addTag">+</button>
+        </div>
+        <button class="mc-btn block" style="margin-top:14px" data-action="addToShoppingList" ${this._addToListBusy ? "disabled" : ""}>
+          <ha-icon icon="mdi:cart-plus"></ha-icon>${this._addToListBusy ? "Wird hinzugefügt …" : "Zur Einkaufsliste hinzufügen"}
+        </button>
+        ${this._showDetailHint ? `<div class="mc-hint">${esc(this._showDetailHint)}</div>` : ""}
         ${ingredients.length ? `<h4>Zutaten</h4><ul>${ingredients.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : ""}
         ${steps.length ? `<h4>Zubereitung</h4><ol>${steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>` : ""}
       </div>
     </div>`;
   }
 
+  _renderShoppingList() {
+    if (!this._shoppingLoaded) return `<div class="mc-loading">Lädt …</div>`;
+    if (this._shoppingError) return `<div class="mc-empty">${esc(this._shoppingError)}</div>`;
+    if (!this._shoppingItems.length) return `<div class="mc-empty">Die Einkaufsliste ist leer.</div>`;
+    const sorted = [...this._shoppingItems].sort((a, b) => (a.checked ? 1 : 0) - (b.checked ? 1 : 0));
+    return `<div class="mc-shopping-list">${sorted
+      .map(
+        (i) => `<label class="mc-shopping-item ${i.checked ? "checked" : ""}">
+          <input type="checkbox" data-action="toggleShoppingItem" data-id="${esc(i.id)}" ${i.checked ? "checked" : ""}>
+          <span>${esc(i.display || i.note || "")}</span>
+        </label>`
+      )
+      .join("")}</div>`;
+  }
+
   _renderImport() {
-    const result = this._importResult;
+    const elapsed = this._importRunning ? Math.round((Date.now() - this._importStartedAt) / 1000) : 0;
     return `
       <form data-form="import" class="mc-import-row">
-        <input data-input="importUrl" placeholder="Link zu einem Rezept oder Insta/TikTok-Video" value="${esc(this._importUrl)}"
-          ${this._importBusy ? "disabled" : ""}>
-        <button type="submit" class="mc-btn" ${this._importBusy ? "disabled" : ""}>${this._importBusy ? "Lädt …" : "Importieren"}</button>
+        <input data-input="importUrl" placeholder="Link zu einem Rezept oder Insta/TikTok-Video" value="${esc(this._importUrl)}">
+        <button type="submit" class="mc-btn">Importieren</button>
       </form>
       ${
-        result && result.slug
-          ? `<div class="mc-hint">Importiert: ${esc(result.slug)}</div>`
-          : result && result.error
-          ? `<div class="mc-hint">Fehler: ${esc(result.error)}</div>`
-          : `<div class="mc-hint">Instagram/TikTok/Facebook/Pinterest-Links und YouTube-Shorts gehen automatisch über Social-to-Mealie, alle anderen Links über Mealies eigenen Import.</div>`
+        this._importRunning
+          ? `<div class="mc-job"><div class="mc-spinner"></div><span class="mc-job-url">${esc(this._importRunning)}</span>
+              <span class="mc-job-time">${elapsed}s</span></div>`
+          : `<div class="mc-hint">Instagram/TikTok/Facebook/Pinterest-Links und YouTube-Shorts gehen automatisch über Social-to-Mealie, alle anderen Links über Mealies eigenen Import. Videos können mehrere Minuten dauern.</div>`
+      }
+      ${
+        this._importQueue.length
+          ? `<div class="mc-queue">${this._importQueue
+              .map(
+                (u, i) => `<div class="mc-queue-item"><span>${i + 1}. ${esc(u)}</span>
+                  <button data-action="cancelQueued" data-url="${esc(u)}" aria-label="Entfernen"><ha-icon icon="mdi:close"></ha-icon></button></div>`
+              )
+              .join("")}</div>`
+          : ""
+      }
+      ${
+        this._importHistory.length
+          ? `<h4>Zuletzt</h4>${this._importHistory
+              .map(
+                (h) =>
+                  `<div class="mc-history-item ${h.error ? "err" : "ok"}">
+                    <ha-icon icon="${h.error ? "mdi:alert-circle-outline" : "mdi:check-circle-outline"}"></ha-icon>
+                    <span>${esc(h.url)}</span>${h.error ? `<span>${esc(h.error)}</span>` : ""}
+                  </div>`
+              )
+              .join("")}`
+          : ""
       }
     `;
   }

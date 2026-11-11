@@ -5,23 +5,35 @@
   window.calls = [];
   window.scenario = {
     recipes: { items: [{ id: "r1", slug: "soup", name: "Suppe", image_url: "/img/r1" }] },
-    detail: { soup: { id: "r1", slug: "soup", name: "Suppe", image_url: "/img/r1", recipeIngredient: [{ quantity: 1, unit: { name: "Stück" }, food: { name: "Zwiebel" }, note: "", display: "1 Stück Zwiebel" }], recipeInstructions: [{ text: "Zwiebel schneiden." }] } },
-    import: { ok: true, slug: "soup" },
+    detail: { soup: { id: "r1", slug: "soup", name: "Suppe", image_url: "/img/r1", tags: [{ name: "vegan" }], recipeIngredient: [{ quantity: 1, unit: { name: "Stück" }, food: { name: "Zwiebel" }, note: "", display: "1 Stück Zwiebel" }], recipeInstructions: [{ text: "Zwiebel schneiden." }] } },
+    tags: { items: [{ name: "vegan", slug: "vegan" }, { name: "schnell", slug: "schnell" }] },
+    shopping: { items: [{ id: "i1", display: "1 Banane", checked: false }] },
+    import: { ok: true, slug: "soup", delayMs: 0 },
   };
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
   window.hassStub = {
     connection: {},
     callWS: async (msg) => { window.calls.push({ ws: msg }); return { path: (msg.path || "") + "?authSig=stub" }; },
     callApi: async (method, path, body) => {
       window.calls.push({ method, path, body });
-      if (method === "GET" && path === "mealie_hub/recipes") return window.scenario.recipes;
+      if (method === "GET" && path === "mealie_hub/tags") return window.scenario.tags;
+      if (method === "GET" && path.startsWith("mealie_hub/recipes") && !path.includes("mealie_hub/recipes/")) return window.scenario.recipes;
       if (method === "GET" && path.startsWith("mealie_hub/recipes/")) {
         const slug = path.split("/").pop();
         const r = window.scenario.detail[slug];
         if (!r) throw { status: 404, body: { error: "not found" } };
         return r;
       }
+      if (method === "PATCH" && path.endsWith("/tags")) return { tags: (body.tags || []).map((t) => ({ name: t })) };
+      if (method === "GET" && path === "mealie_hub/shopping-list") {
+        if (window.scenario.shopping.error) throw { status: 404, body: { error: window.scenario.shopping.error } };
+        return window.scenario.shopping;
+      }
+      if (method === "PUT" && path.startsWith("mealie_hub/shopping-list/items/")) return { ok: true };
+      if (method === "POST" && path.endsWith("/shopping-list")) return { ok: true };
       if (method === "POST" && path === "mealie_hub/import") {
         const r = window.scenario.import;
+        if (r.delayMs) await delay(r.delayMs);
         if (r.ok) return { slug: r.slug };
         throw { status: r.status || 500, body: { error: r.error || "boom" } };
       }
