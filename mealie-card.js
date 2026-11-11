@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const CARD_VERSION = "0.6.0";
+const CARD_VERSION = "0.6.1";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
@@ -176,6 +176,8 @@ const STYLE = `
   .mc-import-row input { flex: 1; min-height: 44px; padding: 10px 16px; border-radius: 999px; font-size: 16px;
     color: var(--primary-text-color); background: var(--mc-soft); border: 1px solid var(--mc-line); }
   .mc-hint { color: var(--secondary-text-color); font-size: 0.9em; margin-top: 10px; line-height: 1.5; }
+  .mc-servings { color: var(--secondary-text-color); font-size: 0.9em; margin: -6px 0 10px; }
+  .mc-servings ha-icon { --mdc-icon-size: 16px; }
 
   .mc-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; margin-bottom: 14px; scrollbar-width: none; }
   .mc-chip { flex: 0 0 auto; min-height: 34px; padding: 6px 14px; border-radius: 999px; cursor: pointer;
@@ -911,7 +913,9 @@ class MealieHubCard extends HTMLElement {
           ${item.id ? `<img data-cover="${esc(coverPath)}" alt="" onerror="this.remove()">` : ""}
         </div>
         <div class="mc-detail-title">${esc(item.name)}</div>
-        ${item.orgURL ? `<a class="mc-btn secondary block" style="margin-bottom:10px" href="${esc(item.orgURL)}" target="_blank" rel="noopener">
+        ${item.recipeServings ? `<div class="mc-servings">
+          <ha-icon icon="mdi:silverware-fork-knife"></ha-icon> ${esc(item.recipeServings)} Portionen</div>` : ""}
+        ${item.orgURL ? `<a class="mc-btn secondary block" style="margin-bottom:10px;margin-top:10px" href="${esc(item.orgURL)}" target="_blank" rel="noopener">
           <ha-icon icon="mdi:open-in-new"></ha-icon>Original ansehen</a>` : ""}
         <div class="mc-chips">
           ${(item.tags || [])

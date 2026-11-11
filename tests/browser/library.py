@@ -42,6 +42,9 @@ with sync_playwright() as p:
     orig_href = pg.evaluate("() => card._overlayRoot.querySelector('a[href]')?.getAttribute('href')")
     check("the original source link is shown and points at orgURL", orig_href == "https://example.com/original-soup", orig_href)
 
+    servings_text = pg.evaluate("() => card._overlayRoot.querySelector('.mc-servings')?.textContent || ''")
+    check("the servings count is shown in the detail", "4 Portionen" in servings_text, servings_text)
+
     # The close button must live inside the scrolling content, not pinned to the
     # sheet's own edge: in the HA Companion app's WebView the sheet can render
     # taller than the actually visible area, leaving nothing positioned against
