@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const CARD_VERSION = "0.5.2";
+const CARD_VERSION = "0.6.0";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
@@ -210,12 +210,16 @@ const STYLE = `
   .mc-history-item .mc-btn { margin-left: auto; flex: 0 0 auto; }
   .mc-queue-item button { background: none; border: none; color: var(--secondary-text-color); cursor: pointer; }
 
-  /* Shopping list */
+  /* Shopping list — the delete button is a sibling of the <label>, not nested inside
+     it, so clicking it doesn't also toggle the checkbox via the label's own click-forwarding. */
   .mc-shopping-list { display: flex; flex-direction: column; gap: 2px; }
-  .mc-shopping-item { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--mc-line); cursor: pointer; }
+  .mc-shopping-item { display: flex; align-items: center; gap: 6px; padding: 6px 4px; border-bottom: 1px solid var(--mc-line); }
+  .mc-shopping-item label { flex: 1; display: flex; align-items: center; gap: 10px; padding: 4px 0; cursor: pointer; min-width: 0; }
   .mc-shopping-item input[type=checkbox] { width: 22px; height: 22px; flex: 0 0 auto; }
   .mc-shopping-item span { flex: 1; }
   .mc-shopping-item.checked span { color: var(--secondary-text-color); text-decoration: line-through; }
+  .mc-shopping-item .mc-btn.round { width: 36px; height: 36px; min-width: 36px; flex: 0 0 auto; }
+  .mc-shopping-item .mc-btn.round ha-icon { --mdc-icon-size: 18px; }
 </style>
 `;
 
@@ -248,6 +252,7 @@ class MealieHubCard extends HTMLElement {
     this._shoppingLoaded = false;
     this._shoppingError = null;
     this._addToListBusy = false;
+    this._clearCheckedBusy = false;
 
     this._importUrl = "";
     this._duplicatePending = null; // a URL awaiting "really import this again?" confirmation
@@ -473,6 +478,32 @@ class MealieHubCard extends HTMLElement {
       this._error = errMessage(err);
       this._render();
     }
+  }
+
+  async _deleteShoppingItem(itemId) {
+    const before = this._shoppingItems;
+    this._shoppingItems = this._shoppingItems.filter((i) => i.id !== itemId);
+    this._render();
+    try {
+      await this._api("DELETE", `mealie_hub/shopping-list/items/${encodeURIComponent(itemId)}`);
+    } catch (err) {
+      this._shoppingItems = before;
+      this._error = errMessage(err);
+      this._render();
+    }
+  }
+
+  async _clearCheckedItems() {
+    this._clearCheckedBusy = true;
+    this._render();
+    try {
+      await this._api("POST", "mealie_hub/shopping-list/clear-checked");
+      this._shoppingItems = this._shoppingItems.filter((i) => !i.checked);
+    } catch (err) {
+      this._error = errMessage(err);
+    }
+    this._clearCheckedBusy = false;
+    this._render();
   }
 
   async _addToShoppingList(recipeId) {
@@ -726,6 +757,14 @@ class MealieHubCard extends HTMLElement {
     this._toggleShoppingItem(el.dataset.id);
   }
 
+  _onAction_deleteShoppingItem(el) {
+    this._deleteShoppingItem(el.dataset.id);
+  }
+
+  _onAction_clearCheckedItems() {
+    this._clearCheckedItems();
+  }
+
   _onAction_addToShoppingList() {
     if (this._detail) this._addToShoppingList(this._detail.id);
   }
@@ -910,14 +949,28 @@ class MealieHubCard extends HTMLElement {
     if (this._shoppingError) return `<div class="mc-empty">${esc(this._shoppingError)}</div>`;
     if (!this._shoppingItems.length) return `<div class="mc-empty">Die Einkaufsliste ist leer.</div>`;
     const sorted = [...this._shoppingItems].sort((a, b) => (a.checked ? 1 : 0) - (b.checked ? 1 : 0));
-    return `<div class="mc-shopping-list">${sorted
-      .map(
-        (i) => `<label class="mc-shopping-item ${i.checked ? "checked" : ""}">
-          <input type="checkbox" data-action="toggleShoppingItem" data-id="${esc(i.id)}" ${i.checked ? "checked" : ""}>
-          <span>${esc(i.display || i.note || "")}</span>
-        </label>`
-      )
-      .join("")}</div>`;
+    const anyChecked = sorted.some((i) => i.checked);
+    return `
+      ${
+        anyChecked
+          ? `<button class="mc-btn secondary block" style="margin-bottom:10px" data-action="clearCheckedItems" ${this._clearCheckedBusy ? "disabled" : ""}>
+              <ha-icon icon="mdi:broom"></ha-icon>${this._clearCheckedBusy ? "Entfernt …" : "Erledigte entfernen"}</button>`
+          : ""
+      }
+      <div class="mc-shopping-list">${sorted
+        .map(
+          (i) => `<div class="mc-shopping-item ${i.checked ? "checked" : ""}">
+            <label>
+              <input type="checkbox" data-action="toggleShoppingItem" data-id="${esc(i.id)}" ${i.checked ? "checked" : ""}>
+              <span>${esc(i.display || i.note || "")}</span>
+            </label>
+            <button class="mc-btn secondary round" data-action="deleteShoppingItem" data-id="${esc(i.id)}" aria-label="Entfernen">
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>`
+        )
+        .join("")}</div>
+    `;
   }
 
   _renderImport() {

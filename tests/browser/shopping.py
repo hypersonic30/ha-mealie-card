@@ -28,6 +28,28 @@ with sync_playwright() as p:
     checked_class = pg.evaluate("() => card.shadowRoot.querySelector('.mc-shopping-item').className")
     check("the checked item gets the struck-through style", "checked" in checked_class, checked_class)
 
+    # Deleting a single item: the delete button is a sibling of the checkbox's
+    # <label>, not nested inside it, so clicking it must not also toggle the item.
+    items_before_delete = pg.evaluate("() => card.shadowRoot.querySelectorAll('.mc-shopping-item').length")
+    pg.evaluate("() => card.shadowRoot.querySelector('[data-action=deleteShoppingItem][data-id=i2]').click()")
+    pg.wait_for_timeout(200)
+    delete_call = pg.evaluate("() => window.calls.filter(c => c.method === 'DELETE' && c.path.includes('shopping-list/items')).pop()?.path")
+    check("deleting an item calls the item's delete endpoint", delete_call == "mealie_hub/shopping-list/items/i2", delete_call)
+    items_after_delete = pg.evaluate("() => card.shadowRoot.querySelectorAll('.mc-shopping-item').length")
+    check("the deleted item disappears from the list", items_after_delete == items_before_delete - 1, (items_before_delete, items_after_delete))
+    stray_put = pg.evaluate("() => window.calls.filter(c => c.method === 'PUT').length")
+    check("deleting i2 never also toggled it via the label's click-forwarding", stray_put == 1, stray_put)  # only i1's earlier toggle
+
+    # "Erledigte entfernen" clears every still-checked item (i1, toggled above) in one go.
+    clear_visible = pg.evaluate("() => !!card.shadowRoot.querySelector('[data-action=clearCheckedItems]')")
+    check("the clear-checked button shows while a checked item remains", clear_visible, clear_visible)
+    pg.evaluate("() => card.shadowRoot.querySelector('[data-action=clearCheckedItems]').click()")
+    pg.wait_for_timeout(200)
+    clear_call = pg.evaluate("() => window.calls.some(c => c.method === 'POST' && c.path === 'mealie_hub/shopping-list/clear-checked')")
+    check("clearing checked items posts to the clear-checked endpoint", clear_call, clear_call)
+    empty_after_clear = pg.evaluate("() => card.shadowRoot.querySelector('.mc-empty')?.textContent || ''")
+    check("the list is empty after clearing the last (checked) item", "leer" in empty_after_clear, empty_after_clear)
+
     # Adding a recipe's ingredients from its detail view.
     pg.evaluate("() => { card._activeTab = 'library'; card._render(); }")
     pg.evaluate("() => card.shadowRoot.querySelector('.mc-tile').click()")

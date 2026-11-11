@@ -8,7 +8,9 @@
     detail: { soup: { id: "r1", slug: "soup", name: "Suppe", image_url: "/img/r1", orgURL: "https://example.com/original-soup", tags: [{ name: "vegan" }], recipeIngredient: [{ quantity: 1, unit: { name: "Stück" }, food: { name: "Zwiebel" }, note: "", display: "1 Stück Zwiebel" }], recipeInstructions: [{ text: "Zwiebel schneiden." }] } },
     deleteRecipe: { ok: true },
     tags: { items: [{ name: "vegan", slug: "vegan" }, { name: "schnell", slug: "schnell" }] },
-    shopping: { items: [{ id: "i1", display: "1 Banane", checked: false }] },
+    shopping: { items: [{ id: "i1", display: "1 Banane", checked: false }, { id: "i2", display: "Milch", checked: true }] },
+    deleteShoppingItem: { ok: true },
+    clearChecked: { ok: true },
     import: { ok: true, slug: "soup", delayMs: 0 },
   };
   const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -36,6 +38,16 @@
         return window.scenario.shopping;
       }
       if (method === "PUT" && path.startsWith("mealie_hub/shopping-list/items/")) return { ok: true };
+      if (method === "DELETE" && path.startsWith("mealie_hub/shopping-list/items/")) {
+        const r = window.scenario.deleteShoppingItem;
+        if (!r.ok) throw { status: r.status || 500, body: { error: r.error || "boom" } };
+        return { ok: true };
+      }
+      if (method === "POST" && path === "mealie_hub/shopping-list/clear-checked") {
+        const r = window.scenario.clearChecked;
+        if (!r.ok) throw { status: r.status || 500, body: { error: r.error || "boom" } };
+        return { removed: (window.scenario.shopping.items || []).filter((i) => i.checked).length };
+      }
       if (method === "POST" && path.endsWith("/shopping-list")) return { ok: true };
       if (method === "POST" && path === "mealie_hub/import") {
         const r = window.scenario.import;
