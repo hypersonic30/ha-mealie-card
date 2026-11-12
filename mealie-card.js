@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const CARD_VERSION = "0.8.1";
+const CARD_VERSION = "0.8.2";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
@@ -111,11 +111,23 @@ const STYLE = `
   /* Sticky so it's still reachable after scrolling down a long library grid —
      stays pinned to the top of the scroll viewport while this card is in view,
      then scrolls away normally once the whole card has passed (native <dialog>-
-     free sticky behavior, no JS needed). Same fade-to-transparent backing as
-     .mc-sheet-close-bar below, not a flat near-opaque fill — a hard-edged block
-     here looked like the glass design simply stopped at the sticky boundary. */
-  .mc-searchbar { position: sticky; top: 0; z-index: 2; display: flex; gap: 8px; margin: 0 -16px 14px; padding: 8px 16px 10px;
-    background: linear-gradient(to bottom, color-mix(in srgb, var(--card-background-color, #1c1c1e) 85%, transparent) 75%, transparent); }
+     free sticky behavior, no JS needed). The backing lives on ::before, not on
+     .mc-searchbar itself, so the fade-out mask only dissolves the backing and
+     never the input: the same blur+tint as ha-card's own background (so it reads
+     as continued glass, not a separate opaque slab) with a mask-image fade in
+     its lower half so tiles scrolling in from below blur in smoothly instead of
+     hitting a hard edge. A flat near-opaque fill with only a short bottom fade
+     (tried first) still read as a solid block because most of its height had no
+     fade and no blur at all. */
+  .mc-searchbar { position: sticky; top: 0; z-index: 2; display: flex; gap: 8px; margin: 0 -16px 14px; padding: 8px 16px 20px; }
+  .mc-searchbar::before {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    background: color-mix(in srgb, var(--card-background-color, #1c1c1e) 55%, transparent);
+    backdrop-filter: blur(var(--mc-blur)) saturate(160%);
+    -webkit-backdrop-filter: blur(var(--mc-blur)) saturate(160%);
+    mask-image: linear-gradient(to bottom, black 55%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, black 55%, transparent);
+  }
   .mc-searchbar input { flex: 1; min-width: 0; min-height: 44px; padding: 10px 16px; border-radius: 999px;
     font-size: 16px; color: var(--primary-text-color); background: var(--mc-soft); border: 1px solid var(--mc-line); }
   .mc-searchbar input:focus { outline: 2px solid color-mix(in srgb, var(--mc-accent) 60%, transparent); }
