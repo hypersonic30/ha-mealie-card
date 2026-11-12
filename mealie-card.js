@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const CARD_VERSION = "0.8.0";
+const CARD_VERSION = "0.8.1";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
@@ -111,10 +111,11 @@ const STYLE = `
   /* Sticky so it's still reachable after scrolling down a long library grid —
      stays pinned to the top of the scroll viewport while this card is in view,
      then scrolls away normally once the whole card has passed (native <dialog>-
-     free sticky behavior, no JS needed). */
-  .mc-searchbar { position: sticky; top: 0; z-index: 2; display: flex; gap: 8px; margin: 0 -16px 14px; padding: 8px 16px 0;
-    background: color-mix(in srgb, var(--card-background-color, #1c1c1e) 92%, transparent);
-    backdrop-filter: blur(var(--mc-blur)) saturate(160%); -webkit-backdrop-filter: blur(var(--mc-blur)) saturate(160%); }
+     free sticky behavior, no JS needed). Same fade-to-transparent backing as
+     .mc-sheet-close-bar below, not a flat near-opaque fill — a hard-edged block
+     here looked like the glass design simply stopped at the sticky boundary. */
+  .mc-searchbar { position: sticky; top: 0; z-index: 2; display: flex; gap: 8px; margin: 0 -16px 14px; padding: 8px 16px 10px;
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--card-background-color, #1c1c1e) 85%, transparent) 75%, transparent); }
   .mc-searchbar input { flex: 1; min-width: 0; min-height: 44px; padding: 10px 16px; border-radius: 999px;
     font-size: 16px; color: var(--primary-text-color); background: var(--mc-soft); border: 1px solid var(--mc-line); }
   .mc-searchbar input:focus { outline: 2px solid color-mix(in srgb, var(--mc-accent) 60%, transparent); }
