@@ -36,6 +36,14 @@ with sync_playwright() as p:
     tag_chips = pg.evaluate("() => [...card._overlayRoot.querySelectorAll('.mc-chip.removable')].map(e => e.textContent)")
     check("the detail dialog shows the recipe's existing tags", any("vegan" in t for t in tag_chips), tag_chips)
 
+    # The tag input suggests existing tags (not already on this recipe) via a native
+    # <datalist>, but the field itself stays a plain text input — free text still works.
+    suggestions = pg.evaluate("() => [...card._overlayRoot.querySelectorAll('#mc-tag-options option')].map(o => o.value)")
+    check("the recipe's own tag ('vegan') is not suggested again", "vegan" not in suggestions, suggestions)
+    check("an existing tag not yet on this recipe is suggested", "schnell" in suggestions, suggestions)
+    list_attr = pg.evaluate("() => card._overlayRoot.querySelector('dialog .mc-tag-add input').getAttribute('list')")
+    check("the tag input is wired to the suggestion list", list_attr == "mc-tag-options", list_attr)
+
     pg.fill("dialog .mc-tag-add input", "schnell")
     pg.click("dialog .mc-tag-add button")
     pg.wait_for_timeout(200)
@@ -46,6 +54,14 @@ with sync_playwright() as p:
     pg.wait_for_timeout(200)
     patch_body2 = pg.evaluate("() => window.calls.filter(c => c.method === 'PATCH').pop()?.body")
     check("removing a tag PATCHes the list without it", "vegan" not in patch_body2["tags"], patch_body2)
+
+    # The datalist only ever suggests existing tags — typing something new and
+    # unsuggested must still create it, not be rejected as an invalid choice.
+    pg.fill("dialog .mc-tag-add input", "glutenfrei")
+    pg.click("dialog .mc-tag-add button")
+    pg.wait_for_timeout(200)
+    patch_body3 = pg.evaluate("() => window.calls.filter(c => c.method === 'PATCH').pop()?.body")
+    check("a brand-new tag not in the suggestion list can still be added", "glutenfrei" in patch_body3["tags"], patch_body3)
 
     check("no page errors", not errs, errs)
     b.close()

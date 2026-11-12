@@ -17,7 +17,10 @@ lose in the Companion app.
   chips above the grid. Add/remove tags right in the detail sheet.
 - **Einkaufsliste** — Mealie's shopping list (first one on the household),
   with checkboxes to tick off what you already have. The detail sheet has an
-  "Zur Einkaufsliste hinzufügen" button to add a recipe's ingredients to it.
+  "Zur Einkaufsliste hinzufügen" button to add a recipe's ingredients to it;
+  if the recipe has a servings count, a stepper lets you scale that count up
+  or down first (e.g. cooking for 6 instead of the stored 4 scales every
+  quantity by 1.5x).
 - **Importieren** — paste a link. Instagram/TikTok/Facebook/Pinterest links
   and `youtube.com/shorts/` go to Social-to-Mealie (if configured); every
   other link goes through Mealie's own scraper + AI-provider fallback.

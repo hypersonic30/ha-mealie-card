@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const CARD_VERSION = "0.7.0";
+const CARD_VERSION = "0.8.0";
 const CARD_TAG = "mealie-hub-card";
 const EDITOR_TAG = "mealie-hub-card-editor";
 
@@ -108,7 +108,13 @@ const STYLE = `
   .mc-panel { padding: 14px 16px 18px; }
   .mc-empty, .mc-loading { padding: 26px 8px; text-align: center; color: var(--secondary-text-color); font-size: 0.92em; line-height: 1.5; }
 
-  .mc-searchbar { display: flex; gap: 8px; margin: 0 0 14px; }
+  /* Sticky so it's still reachable after scrolling down a long library grid —
+     stays pinned to the top of the scroll viewport while this card is in view,
+     then scrolls away normally once the whole card has passed (native <dialog>-
+     free sticky behavior, no JS needed). */
+  .mc-searchbar { position: sticky; top: 0; z-index: 2; display: flex; gap: 8px; margin: 0 -16px 14px; padding: 8px 16px 0;
+    background: color-mix(in srgb, var(--card-background-color, #1c1c1e) 92%, transparent);
+    backdrop-filter: blur(var(--mc-blur)) saturate(160%); -webkit-backdrop-filter: blur(var(--mc-blur)) saturate(160%); }
   .mc-searchbar input { flex: 1; min-width: 0; min-height: 44px; padding: 10px 16px; border-radius: 999px;
     font-size: 16px; color: var(--primary-text-color); background: var(--mc-soft); border: 1px solid var(--mc-line); }
   .mc-searchbar input:focus { outline: 2px solid color-mix(in srgb, var(--mc-accent) 60%, transparent); }
@@ -122,6 +128,8 @@ const STYLE = `
   .mc-btn.secondary { color: var(--primary-text-color); background: var(--mc-soft); border: 1px solid var(--mc-line); box-shadow: none; }
   .mc-btn.danger { background: color-mix(in srgb, var(--error-color, #db4437) 90%, transparent); box-shadow: none; }
   .mc-btn.round { width: 48px; min-width: 48px; padding: 0; }
+  .mc-btn.round.small { width: 32px; min-width: 32px; height: 32px; min-height: 32px; }
+  .mc-btn.round.small ha-icon { --mdc-icon-size: 16px; }
   .mc-btn ha-icon { --mdc-icon-size: 22px; }
   .mc-btn.block { width: 100%; }
   .mc-danger-zone { margin-top: 24px; }
@@ -178,6 +186,9 @@ const STYLE = `
   .mc-hint { color: var(--secondary-text-color); font-size: 0.9em; margin-top: 10px; line-height: 1.5; }
   .mc-servings { color: var(--secondary-text-color); font-size: 0.9em; margin: -6px 0 10px; }
   .mc-servings ha-icon { --mdc-icon-size: 16px; }
+  .mc-servings-picker { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+  .mc-servings-picker .mc-servings-label { flex: 1; min-width: 0; color: var(--secondary-text-color); font-size: 0.9em; }
+  .mc-servings-value { min-width: 24px; text-align: center; font-weight: 700; }
 
   .mc-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; margin-bottom: 14px; scrollbar-width: none; }
   .mc-chip { flex: 0 0 auto; min-height: 34px; padding: 6px 14px; border-radius: 999px; cursor: pointer;
@@ -245,6 +256,7 @@ class MealieHubCard extends HTMLElement {
     this._showDetailHint = null;
     this._deleteConfirming = false;
     this._deleteBusy = false;
+    this._shoppingServings = null; // desired servings for "add to shopping list"; null = use the recipe's own count
 
     this._tags = []; // [{name, slug}] from /api/mealie_hub/tags
     this._tagFilter = null; // selected tag slug, or null for "Alle"
@@ -515,11 +527,11 @@ class MealieHubCard extends HTMLElement {
     this._render();
   }
 
-  async _addToShoppingList(recipeId) {
+  async _addToShoppingList(recipeId, scale) {
     this._addToListBusy = true;
     this._render();
     try {
-      await this._api("POST", `mealie_hub/recipes/${encodeURIComponent(recipeId)}/shopping-list`);
+      await this._api("POST", `mealie_hub/recipes/${encodeURIComponent(recipeId)}/shopping-list`, { scale });
       this._shoppingLoaded = false; // refetched next time the tab opens
       this._showDetailHint = "Zur Einkaufsliste hinzugefügt.";
     } catch (err) {
@@ -580,6 +592,7 @@ class MealieHubCard extends HTMLElement {
     this._showDetailHint = null;
     this._deleteConfirming = false;
     this._deleteBusy = false;
+    this._shoppingServings = null;
     this._render();
     try {
       this._detail = await this._api("GET", `mealie_hub/recipes/${encodeURIComponent(slug)}`);
@@ -762,6 +775,10 @@ class MealieHubCard extends HTMLElement {
     this._enqueueImport(el.dataset.url, true);
   }
 
+  _onAction_retryImportUrl(el) {
+    this._enqueueImport(el.dataset.url, true);
+  }
+
   _onAction_selectTag(el) {
     this._setTagFilter(el.dataset.slug);
   }
@@ -779,7 +796,22 @@ class MealieHubCard extends HTMLElement {
   }
 
   _onAction_addToShoppingList() {
-    if (this._detail) this._addToShoppingList(this._detail.id);
+    if (!this._detail) return;
+    const base = this._detail.recipeServings || null;
+    const desired = base ? this._shoppingServings ?? base : null;
+    this._addToShoppingList(this._detail.id, base ? desired / base : 1);
+  }
+
+  _onAction_decServings() {
+    const base = this._detail?.recipeServings || 1;
+    this._shoppingServings = Math.max(1, (this._shoppingServings ?? base) - 1);
+    this._render();
+  }
+
+  _onAction_incServings() {
+    const base = this._detail?.recipeServings || 1;
+    this._shoppingServings = (this._shoppingServings ?? base) + 1;
+    this._render();
   }
 
   _onAction_removeTag(el) {
@@ -934,9 +966,21 @@ class MealieHubCard extends HTMLElement {
             .join("")}
         </div>
         <div class="mc-tag-add">
-          <input data-input="tagDraft" data-focus-id="tagDraft" placeholder="Tag hinzufügen …" value="${esc(this._tagDraft)}">
+          <input data-input="tagDraft" data-focus-id="tagDraft" list="mc-tag-options" placeholder="Tag hinzufügen …" value="${esc(this._tagDraft)}">
           <button class="mc-btn secondary" data-action="addTag">+</button>
         </div>
+        <datalist id="mc-tag-options">
+          ${this._tags
+            .filter((t) => !(item.tags || []).some((it) => it.name === t.name))
+            .map((t) => `<option value="${esc(t.name)}"></option>`)
+            .join("")}
+        </datalist>
+        ${item.recipeServings ? `<div class="mc-servings-picker">
+          <span class="mc-servings-label">Für wie viele Portionen einkaufen?</span>
+          <button class="mc-btn secondary round small" data-action="decServings" aria-label="Weniger Portionen"><ha-icon icon="mdi:minus"></ha-icon></button>
+          <span class="mc-servings-value">${this._shoppingServings ?? item.recipeServings}</span>
+          <button class="mc-btn secondary round small" data-action="incServings" aria-label="Mehr Portionen"><ha-icon icon="mdi:plus"></ha-icon></button>
+        </div>` : ""}
         <button class="mc-btn block" style="margin-top:14px" data-action="addToShoppingList" ${this._addToListBusy ? "disabled" : ""}>
           <ha-icon icon="mdi:cart-plus"></ha-icon>${this._addToListBusy ? "Wird hinzugefügt …" : "Zur Einkaufsliste hinzufügen"}
         </button>
@@ -992,7 +1036,8 @@ class MealieHubCard extends HTMLElement {
     const elapsed = this._importRunning ? Math.round(Date.now() / 1000 - this._importRunning.started_at) : 0;
     return `
       <form data-form="import" class="mc-import-row">
-        <input data-input="importUrl" data-focus-id="importUrl" placeholder="Link zu einem Rezept oder Insta/TikTok-Video" value="${esc(this._importUrl)}">
+        <input data-input="importUrl" data-focus-id="importUrl" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false"
+          placeholder="Link zu einem Rezept oder Insta/TikTok-Video" value="${esc(this._importUrl)}">
         <button type="submit" class="mc-btn">Importieren</button>
       </form>
       ${
@@ -1034,6 +1079,7 @@ class MealieHubCard extends HTMLElement {
                 return `<div class="mc-history-item ${h.error ? "err" : "ok"}">
                   <ha-icon icon="${h.error ? "mdi:alert-circle-outline" : "mdi:check-circle-outline"}"></ha-icon>
                   <span>${esc(h.url)}</span>${h.error ? `<span>${esc(h.error)}</span>` : ""}
+                  ${h.error ? `<button class="mc-btn secondary" data-action="retryImportUrl" data-url="${esc(h.url)}">Nochmal</button>` : ""}
                 </div>`;
               })
               .join("")}`

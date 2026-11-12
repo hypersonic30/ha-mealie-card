@@ -19,6 +19,11 @@ with sync_playwright() as p:
     names = pg.evaluate("() => [...card.shadowRoot.querySelectorAll('.mc-tile-title')].map(e => e.textContent)")
     check("tile shows the recipe name", names == ["Suppe"], names)
 
+    # The search bar stays sticky while scrolling a long grid, instead of scrolling
+    # away and forcing a scroll back up every time you want to search again.
+    search_position = pg.evaluate("() => getComputedStyle(card.shadowRoot.querySelector('.mc-searchbar')).position")
+    check("the search bar is sticky", search_position == "sticky", search_position)
+
     # The image is loaded via a signed path (plain <img> tags can't send a bearer
     # header), not the raw proxied URL directly. Checked via the sign call itself,
     # not the <img>'s final src: against this stub server the signed URL still

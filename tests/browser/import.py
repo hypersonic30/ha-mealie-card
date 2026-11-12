@@ -83,6 +83,30 @@ with sync_playwright() as p:
     err_entry = pg.evaluate("() => card.shadowRoot.querySelector('.mc-history-item.err')?.textContent || ''")
     check("an upstream error lands in the history as an error entry", "social_not_configured" in err_entry, err_entry)
 
+    # A plain (non-duplicate) failure also gets a retry button, so a timeout or
+    # upstream error doesn't force retyping the whole link.
+    retry_btn = pg.evaluate(
+        "() => [...card.shadowRoot.querySelectorAll('.mc-history-item.err')]"
+        ".find(el => el.textContent.includes('boom'))?.querySelector('[data-action=retryImportUrl]')"
+    )
+    check("a plain import error shows a retry button", retry_btn is not None, retry_btn)
+    calls_before_plain_retry = pg.evaluate("() => window.calls.filter(c => c.method === 'POST' && c.path === 'mealie_hub/import').length")
+    pg.evaluate(
+        "() => [...card.shadowRoot.querySelectorAll('.mc-history-item.err')]"
+        ".find(el => el.textContent.includes('boom')).querySelector('[data-action=retryImportUrl]').click()"
+    )
+    pg.wait_for_timeout(100)
+    plain_retry_call = pg.evaluate("() => window.calls.filter(c => c.method === 'POST' && c.path === 'mealie_hub/import').pop()")
+    check(
+        "clicking it resends that same URL with force:true",
+        plain_retry_call["body"]["url"] == "https://www.tiktok.com/@x/video/boom" and plain_retry_call["body"]["force"] is True,
+        plain_retry_call,
+    )
+    calls_after_plain_retry = pg.evaluate("() => window.calls.filter(c => c.method === 'POST' && c.path === 'mealie_hub/import').length")
+    check("the plain-error retry actually made a new request", calls_after_plain_retry == calls_before_plain_retry + 1, (calls_before_plain_retry, calls_after_plain_retry))
+    pg.evaluate("() => window.finishCurrentImportJob({ slug: 'boom-retry-slug' })")
+    pg.evaluate("() => card._pollImportStatus()")
+
     # Resubmitting a link already running/queued/just-succeeded (this session) asks for
     # confirmation instead of enqueueing a duplicate — checked purely against the
     # locally-synced state, no extra network round trip.
